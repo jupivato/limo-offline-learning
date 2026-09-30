@@ -19,7 +19,7 @@ La qualification des performances s'appuie sur quatre caractéristiques de pose 
 - **Répétabilité d'Orientation ($R_o$)** : Étalement angulaire $3S_o$.
 
 ### 1.3. Les Fondements de l'Apprentissage Hors Ligne (Cours ENIB & Littérature)
-- Exploitation des **9 manœuvres canoniques de l'ENIB** pour couvrir exhaustivement l'espace d'état différentiel.
+- Exploitation des **9 manœuvres canoniques** pour couvrir exhaustivement l'espace d'état différentiel.
 - Remplacement du signal de récompense clairsemé du RL (Farias et al., 2020) par une supervision dense issue de trajectoires expertes, réduisant l'effort d'échantillonnage de plusieurs millions d'itérations à quelques milliers d'échantillons.
 
 ---
