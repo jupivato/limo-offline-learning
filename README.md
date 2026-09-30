@@ -24,18 +24,31 @@ Ce projet propose une alternative robuste et sécurisée :
 ## 📐 Fondements Théoriques et Modélisation
 
 ### Modèle Cinématique et Variables d'Entrée
-Le châssis différentiel du LIMO est décrit par sa pose cartésienne $\mathbf{x} = [x, y, \theta]^T$ et commandé par le vecteur de vitesses $\mathbf{u} = [v_{\text{lin}}, v_{\text{ang}}]^T$.
-Les entrées normalisées du réseau de neurones sont définies par :
-$$in_0 = (x - x_d) \cdot \alpha_x$$
-$$in_1 = (y - y_d) \cdot \alpha_y$$
-$$in_2 = (\text{recast}(\theta - \theta_d) - \theta_s(x, y)) \cdot \alpha_\theta$$
 
-avec les facteurs d'échelle $\boldsymbol{\alpha} = [1/3, 1/3, 1/\pi]$ et la loi d'orientation stratégique ENIB évitant les minima locaux :
-$$\theta_s(x, y) = \tanh(10x) \cdot \arctan(1y)$$
+Le châssis différentiel du LIMO est repéré par sa pose `(x, y, θ)` et commandé par le vecteur de vitesses `(v_lin, v_ang)`.  
+Les 3 entrées normalisées transmises au réseau de neurones sont :
 
-### Fonction de Perte Hors Ligne
-L'optimisation des poids synaptiques $\mathbf{w}$ minimise l'erreur quadratique moyenne (MSE) entre les commandes prédites et les commandes de démonstration :
-$$\mathcal{L}_{\text{MSE}} = \frac{1}{N}\sum_{i=1}^N \left[ \left(\hat{v}_{\text{lin}}^{(i)} - v_{\text{lin}}^{(i)*}\right)^2 + \beta \left(\hat{v}_{\text{ang}}^{(i)} - v_{\text{ang}}^{(i)*}\right)^2 \right]$$
+- **`in_0`** = `(x - x_cible) × α_x`
+- **`in_1`** = `(y - y_cible) × α_y`
+- **`in_2`** = `(recast(θ - θ_cible) - θ_s(x, y)) × α_θ`
+
+Avec :
+- Facteurs d'échelle : **`α = [1/3, 1/3, 1/π]`**
+- Orientation stratégique (évite les minima locaux) : **`θ_s(x, y) = tanh(10·x) · arctan(1·y)`**
+
+### Fonction de Perte Hors Ligne (MSE)
+
+L'entraînement optimise les poids synaptiques en minimisant l'erreur quadratique moyenne entre les vitesses prédites et les vitesses de démonstration :
+
+```text
+Loss = (1 / N) · Σ [ (v_lin_pred - v_lin_demo)² + β · (v_ang_pred - v_ang_demo)² ]
+```
+
+Où :
+- **`v_lin_pred`**, **`v_ang_pred`** : vitesses linéaire et angulaire prédites par le réseau.
+- **`v_lin_demo`**, **`v_ang_demo`** : vitesses de consigne issues de la démonstration experte.
+- **`β`** : coefficient de pondération angulaire (par défaut `β = 1.0`).
+- **`N`** : nombre d'échantillons du lot (*batch*).
 
 ---
 
