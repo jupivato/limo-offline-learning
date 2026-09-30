@@ -30,8 +30,8 @@ $$in_0 = (x - x_d) \cdot \alpha_x$$
 $$in_1 = (y - y_d) \cdot \alpha_y$$
 $$in_2 = (\text{recast}(\theta - \theta_d) - \theta_s(x, y)) \cdot \alpha_\theta$$
 
-avec les facteurs d'échelle $\boldsymbol{\alpha} = [1/6, 1/3, 1/\pi]$ et la loi d'orientation stratégique ENIB évitant les minima locaux :
-$$\theta_s(x, y) = \tanh(20x) \cdot \arctan(2y)$$
+avec les facteurs d'échelle $\boldsymbol{\alpha} = [1/3, 1/3, 1/\pi]$ et la loi d'orientation stratégique ENIB évitant les minima locaux :
+$$\theta_s(x, y) = \tanh(10x) \cdot \arctan(1y)$$
 
 ### Fonction de Perte Hors Ligne
 L'optimisation des poids synaptiques $\mathbf{w}$ minimise l'erreur quadratique moyenne (MSE) entre les commandes prédites et les commandes de démonstration :
