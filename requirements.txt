@@ -1,0 +1,9 @@
+# Dependências para o projeto LIMO Offline Learning
+# CPU-first: compatível com o ambiente de execução de referência (~/Bureau/venvRobot)
+torch>=2.0.0
+numpy>=1.24.0
+matplotlib>=3.7.0
+openpyxl>=3.1.0
+pandas>=2.0.0
+scipy>=1.10.0
+pytest>=7.0.0
