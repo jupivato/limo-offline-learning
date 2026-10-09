@@ -1,0 +1,69 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv/
+~/Bureau/venvRobot
+
+# PyTorch checkpoints and generated datasets (large files)
+*.pt
+*.pth
+data/raw/*.csv
+data/augmented/*.csv
+data/curated/*.csv
+data/curated/*.svg
+data/curated/*.html
+data/evaluation/
+res/
+*.log
+
+# Evaluation results, metrics and plots
+*.png
+*.jpg
+*.svg
+models/training_history.json
+
+# Keep empty data folders tracked
+!data/raw/.gitkeep
+!data/curated/.gitkeep
+!data/augmented/.gitkeep
+!models/.gitkeep
+
+# IDEs and OS files
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Agent skills and customizations (local development only)
+.agents/
+.agent/
+.gemini/

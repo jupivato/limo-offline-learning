@@ -15,8 +15,8 @@ Dans les travaux précédents, l'entraînement du réseau de neurones était eff
 
 Ce projet propose une alternative robuste et sécurisée :
 1. **Découplage Temporel et Sécurité** : L'apprentissage s'effectue entièrement **hors ligne** (*offline*). Aucun gradient n'est rétropropagé pendant le déplacement physique du robot, éliminant tout risque d'oscillations violentes ou de saturation moteur.
-2. **Jeu de Données Artisanal Équilibré** : La base d'apprentissage est construite à partir de démonstrations manuelles ou canoniques couvrant les **9 manœuvres élémentaires de l'ENIB**, sur l'ensemble des 4 quadrants et pour des orientations variées.
-3. **Compatibilité 1-pour-1 avec la Base Existante** : Conservation stricte de l'architecture du réseau `PioneerNN` (perceptron multicouche 3-1000-2 avec activation `Tanh`), des facteurs de normalisation $\boldsymbol{\alpha}$ et du format de sérialisation des poids en fichier JSON (`input_weights`, `output_weights`).
+2. **Génération par Règles Expertes (9 Manœuvres ENIB)** : La base d'apprentissage est construite de façon autonome par un **contrôleur expert à règles conditionnelles (`if / elif / else`)** implémentant formellement les **9 manœuvres canoniques de l'ENIB**, complétée ou substituable par des démonstrations en téléopération manuelle à 20 Hz.
+3. **Architecture PioneerNN Épurée (`bias=False`)** : Respect strict du perceptron multicouche 3-1000-2 avec activation `Tanh`. L'exclusion systématique des biais (`bias=False`) garantit la condition physique de repos à l'équilibre $f(0, 0, 0) = [0.0, 0.0]$, la préservation de la symétrie sagittale et l'exportation fidèle de ses **5 000 poids synaptiques** au format standard JSON (`input_weights`, `output_weights`).
 4. **Qualification Métrologique ISO 18646-2** : Évaluation rigoureuse de la précision de pose ($A_p, A_o$) et de la répétabilité de pose ($R_p, R_o$) en boucle fermée avec des poids gelés.
 
 ---
@@ -70,7 +70,10 @@ limo-offline-learning/
 ├── docs/                       # Planification détaillée et documentation technique
 ├── models/                     # Poids du réseau exportés au format JSON
 ├── src/
-│   ├── core/                   # PioneerNN (PyTorch) et sérialiseur JSON
+│   ├── core/                   # PioneerNN (bias=False, 5000 poids) et sérialiseur JSON
+│   ├── data/                   # Contrôleur expert à règles et curateur de données
+│   │   ├── generate_rule_based_dataset.py  # Générateur if/else (9 manœuvres ENIB)
+│   │   └── curate_dataset.py               # Curateur, filtrage statique et miroir
 │   ├── ros2/                   # Interface ROS 2 (/odom et /cmd_vel à 20 Hz)
 │   ├── teleop/                 # Nœud de téléopération et enregistrement (20 Hz)
 │   ├── training/               # Entraînement hors ligne (MSE Loss + AdamW)
@@ -89,32 +92,35 @@ limo-offline-learning/
 pip install -r requirements.txt
 ```
 
-### 2. Collecte des Démonstrations Manuelles
-Téléopérer le robot vers une cible avec une fréquence rigoureuse de 20 Hz :
+### 2. Génération du Jeu de Données par Règles Expertes (Recommandé)
+Générer automatiquement des dizaines de milliers d'échantillons couvrant les **9 manœuvres canoniques de l'ENIB** dans les 4 quadrants via l'expert conditionnel `if / elif / else` :
 ```bash
-python3 -m src.teleop.collect_demonstrations --target 0.0 0.0 0.0
+python3 -m src.data.generate_rule_based_dataset --output data/curated/handcrafted_dataset.csv
 ```
 
-### 3. Traitement et Augmentation des Données
-Nettoyer les trajectoires et appliquer la symétrie sagittale ($y \to -y$, $v_{\text{ang}} \to -v_{\text{ang}}$) :
+> **Alternative (Téléopération Manuelle)** :
+> Si vous souhaitez capturer des trajectoires au joystick/clavier :
+> ```bash
+> # A. Enregistrement en direct à 20 Hz vers la cible :
+> python3 -m src.teleop.collect_demonstrations --target 0.0 0.0 0.0
+> # B. Curage et symétrie sagittale bilatérale :
+> python3 -m src.data.curate_dataset --input-dir data/raw/ --output data/curated/handcrafted_dataset.csv
+> ```
+
+### 3. Entraînement Hors Ligne (Behavioral Cloning)
+Entraîner le perceptron `PioneerNN` (5 000 poids synaptiques, sans biais) et exporter le modèle au format JSON standard :
 ```bash
-python3 -m src.data.curate_dataset --input-dir data/raw/ --output data/curated/handcrafted_dataset.csv
+python3 -m src.training.train_offline --dataset data/curated/handcrafted_dataset.csv --epochs 100 --batch-size 64
 ```
 
-### 4. Entraînement Hors Ligne
-Entraîner le perceptron `PioneerNN` et exporter les poids au format JSON standard :
-```bash
-python3 -m src.training.train_offline --dataset data/curated/handcrafted_dataset.csv --epochs 100
-```
-
-### 5. Évaluation Autonome en Boucle Fermée
+### 4. Évaluation Autonome en Boucle Fermée
 Exécuter la politique apprise avec poids gelés sous Gazebo ou sur robot réel :
 ```bash
 python3 -m src.evaluation.run_autonomous --weights models/supervised_w_torch_diff.json --target 0.0 0.0 0.0
 ```
 
-### 6. Benchmark Métrologique ISO 18646-2
-Calculer la précision et la répétabilité de pose à partir des fichiers de télémétrie :
+### 5. Benchmark Métrologique ISO 18646-2
+Calculer la précision ($A_p, A_o$) et la répétabilité ($R_p, R_o$) de pose à partir de la télémétrie :
 ```bash
 python3 calculus/calculate_iso_metrics.py
 ```
