@@ -23,6 +23,14 @@ import time
 import argparse
 from typing import Tuple, Dict, Any, List
 
+# Inclusion automatique du chemin dist-packages snap si présent
+for _p in [
+    os.path.expanduser("~/local/lib/python3.14/dist-packages"),
+    os.path.expanduser("~/snap/antigravity-cli/common/local/lib/python3.14/dist-packages")
+]:
+    if os.path.exists(_p) and _p not in sys.path:
+        sys.path.insert(0, _p)
+
 try:
     import torch
     import torch.nn as nn
@@ -31,6 +39,9 @@ try:
 except ImportError:
     TORCH_AVAILABLE = False
     Dataset = object
+    class _DummyNN:
+        Module = object
+    nn = _DummyNN()
 
 from src.core.pioneer_nn import PioneerNN
 
