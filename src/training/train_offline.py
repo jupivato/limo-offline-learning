@@ -31,6 +31,9 @@ try:
 except ImportError:
     TORCH_AVAILABLE = False
     Dataset = object
+    class _DummyNN:
+        Module = object
+    nn = _DummyNN()
 
 from src.core.pioneer_nn import PioneerNN
 
@@ -53,11 +56,27 @@ class DemonstrationDataset(Dataset):
             reader = csv.DictReader(f)
             for row in reader:
                 try:
-                    in_0 = float(row["in_0"])
-                    in_1 = float(row["in_1"])
-                    in_2 = float(row["in_2"])
-                    v_lin = float(row["v_lin"])
-                    v_ang = float(row["v_ang"])
+                    if "x_r" in row:
+                        # Schéma simplifié V2 (5 colonnes)
+                        xr = float(row["x_r"])
+                        yr = float(row["y_r"])
+                        thr = float(row["theta_r"])
+                        v_lin = float(row["v_r"])
+                        v_ang = float(row["w_r"])
+
+                        # Facteurs d'échelle ENIB standardisés
+                        ths = math.tanh(10.0 * xr) * math.atan(1.0 * yr)
+                        e_th = math.atan2(math.sin(thr - ths), math.cos(thr - ths))
+                        in_0 = xr * ALPHA[0]
+                        in_1 = yr * ALPHA[1]
+                        in_2 = e_th * ALPHA[2]
+                    else:
+                        # Schéma complet V1 (19 colonnes)
+                        in_0 = float(row["in_0"])
+                        in_1 = float(row["in_1"])
+                        in_2 = float(row["in_2"])
+                        v_lin = float(row["v_lin"])
+                        v_ang = float(row["v_ang"])
 
                     inputs.append([in_0, in_1, in_2])
                     targets.append([v_lin, v_ang])
