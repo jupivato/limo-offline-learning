@@ -113,7 +113,8 @@ def train_offline(
     learning_rate: float = 0.001,
     weight_decay: float = 1e-4,
     beta: float = 1.0,
-    patience: int = 15
+    patience: int = 15,
+    hidden_size: int = 1000
 ) -> Dict[str, Any]:
     """
     Exécute le pipeline d'entraînement supervisé hors ligne.
@@ -164,7 +165,7 @@ def train_offline(
     # 2. Instanciation du modèle, critère et optimiseur
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Périphérique de calcul : {device}")
-    model = PioneerNN(input_size=3, hidden_size=1000, output_size=2, use_bias=True).to(device)
+    model = PioneerNN(input_size=3, hidden_size=hidden_size, output_size=2, use_bias=True).to(device)
     criterion = WeightedMSELoss(beta=beta).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
@@ -274,6 +275,7 @@ if __name__ == "__main__":
     parser.add_argument("--batch-size", type=int, default=128, help="Taille de batch")
     parser.add_argument("--lr", type=float, default=0.001, help="Taux d'apprentissage")
     parser.add_argument("--beta", type=float, default=1.0, help="Pondération de l'erreur angulaire")
+    parser.add_argument("--hidden-size", type=int, default=1000, help="Nombre de neurones dans la couche cachée (défaut: 1000)")
     args = parser.parse_args()
 
     train_offline(
@@ -282,5 +284,6 @@ if __name__ == "__main__":
         epochs=args.epochs,
         batch_size=args.batch_size,
         learning_rate=args.lr,
-        beta=args.beta
+        beta=args.beta,
+        hidden_size=args.hidden_size
     )

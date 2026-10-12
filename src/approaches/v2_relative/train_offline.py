@@ -137,7 +137,8 @@ def train_offline(
     weight_decay: float = 1e-4,
     beta: float = 1.0,
     patience: int = 15,
-    use_bias: bool = False
+    use_bias: bool = False,
+    hidden_size: int = 1000
 ) -> Dict[str, Any]:
     """
     Exécute le pipeline d'entraînement supervisé hors ligne.
@@ -190,7 +191,7 @@ def train_offline(
     # 2. Instanciation du modèle, critère et optimiseur
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Périphérique de calcul : {device}")
-    model = PioneerNN(input_size=3, hidden_size=1000, output_size=2, use_bias=use_bias).to(device)
+    model = PioneerNN(input_size=3, hidden_size=hidden_size, output_size=2, use_bias=use_bias).to(device)
     criterion = WeightedMSELoss(beta=beta).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
@@ -303,6 +304,7 @@ if __name__ == "__main__":
     parser.add_argument("--use-bias", action="store_true", default=False, help="Active les biais neuronaux (par défaut: False)")
     parser.add_argument("--no-bias", action="store_false", dest="use_bias", help="Désactive les biais neuronaux (par défaut: désactivés pour garantir arrêt strict à l'origine)")
     parser.add_argument("--patience", type=int, default=15, help="Seuil d'arrêt précoce en nombre d'époques (défaut: 15)")
+    parser.add_argument("--hidden-size", type=int, default=1000, help="Nombre de neurones dans la couche cachée (défaut: 1000)")
     args = parser.parse_args()
 
     train_offline(
@@ -313,5 +315,6 @@ if __name__ == "__main__":
         learning_rate=args.lr,
         beta=args.beta,
         patience=args.patience,
-        use_bias=args.use_bias
+        use_bias=args.use_bias,
+        hidden_size=args.hidden_size
     )
