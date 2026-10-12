@@ -24,6 +24,14 @@ import math
 import argparse
 from typing import Tuple, Dict, Any, List
 
+# Inclusion automatique du chemin dist-packages snap si présent
+for _p in [
+    os.path.expanduser("~/local/lib/python3.14/dist-packages"),
+    os.path.expanduser("~/snap/antigravity-cli/common/local/lib/python3.14/dist-packages")
+]:
+    if os.path.exists(_p) and _p not in sys.path:
+        sys.path.insert(0, _p)
+
 try:
     import torch
     import torch.nn as nn
@@ -128,7 +136,8 @@ def train_offline(
     learning_rate: float = 0.001,
     weight_decay: float = 1e-4,
     beta: float = 1.0,
-    patience: int = 15
+    patience: int = 15,
+    use_bias: bool = False
 ) -> Dict[str, Any]:
     """
     Exécute le pipeline d'entraînement supervisé hors ligne.
@@ -143,6 +152,7 @@ def train_offline(
         weight_decay (float): Régularisation L2.
         beta (float): Pondération de l'erreur sur v_ang.
         patience (int): Seuil d'époques sans amélioration pour l'arrêt précoce.
+        use_bias (bool): Activer ou non les biais neuronaux (défaut: False pour garantir v=0, w=0 à l'origine).
 
     Returns:
         Dict[str, Any]: Métriques finales et historique d'entraînement.
@@ -158,6 +168,7 @@ def train_offline(
     print(f"Taille de batch      : {batch_size}")
     print(f"Taux d'apprentissage : {learning_rate} (AdamW)")
     print(f"Coefficient bêta     : {beta}")
+    print(f"Biais neuronaux      : {'Activés' if use_bias else 'Désactivés (v=0, w=0 strict à l\'origine)'}")
     print("=" * 65 + "\n")
 
     # 1. Chargement et partitionnement des données
@@ -179,7 +190,7 @@ def train_offline(
     # 2. Instanciation du modèle, critère et optimiseur
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Périphérique de calcul : {device}")
-    model = PioneerNN(input_size=3, hidden_size=1000, output_size=2, use_bias=True).to(device)
+    model = PioneerNN(input_size=3, hidden_size=1000, output_size=2, use_bias=use_bias).to(device)
     criterion = WeightedMSELoss(beta=beta).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
@@ -289,6 +300,9 @@ if __name__ == "__main__":
     parser.add_argument("--batch-size", type=int, default=128, help="Taille de batch")
     parser.add_argument("--lr", type=float, default=0.001, help="Taux d'apprentissage")
     parser.add_argument("--beta", type=float, default=1.0, help="Pondération de l'erreur angulaire")
+    parser.add_argument("--use-bias", action="store_true", default=False, help="Active les biais neuronaux (par défaut: False)")
+    parser.add_argument("--no-bias", action="store_false", dest="use_bias", help="Désactive les biais neuronaux (par défaut: désactivés pour garantir arrêt strict à l'origine)")
+    parser.add_argument("--patience", type=int, default=15, help="Seuil d'arrêt précoce en nombre d'époques (défaut: 15)")
     args = parser.parse_args()
 
     train_offline(
@@ -297,5 +311,7 @@ if __name__ == "__main__":
         epochs=args.epochs,
         batch_size=args.batch_size,
         learning_rate=args.lr,
-        beta=args.beta
+        beta=args.beta,
+        patience=args.patience,
+        use_bias=args.use_bias
     )

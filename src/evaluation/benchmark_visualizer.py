@@ -35,12 +35,26 @@ Projet : LIMO Offline Learning (CERV / ENIB)
 """
 
 import os
+import sys
 import re
 import glob
 import csv
 import math
 import json
 from typing import List, Dict, Any, Optional, Tuple
+
+# Inclusion automatique du dossier racine du projet dans sys.path
+_project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if _project_root not in sys.path:
+    sys.path.insert(0, _project_root)
+
+# Inclusion automatique du chemin dist-packages snap si présent
+for _p in [
+    os.path.expanduser("~/local/lib/python3.14/dist-packages"),
+    os.path.expanduser("~/snap/antigravity-cli/common/local/lib/python3.14/dist-packages")
+]:
+    if os.path.exists(_p) and _p not in sys.path:
+        sys.path.insert(0, _p)
 
 try:
     import matplotlib
@@ -528,7 +542,13 @@ def regenerate_session_plots(batch_dir: str) -> None:
     """Régénère pour chaque trace individuelle le plot session 3x3 conforme à DataLogger."""
     if not MATPLOTLIB_AVAILABLE:
         return
-    from src.evaluation.data_logger import DataLogger
+    try:
+        from src.evaluation.data_logger import DataLogger
+    except ImportError:
+        try:
+            from data_logger import DataLogger
+        except ImportError:
+            from .data_logger import DataLogger
     csvs = sorted(glob.glob(os.path.join(batch_dir, "*.csv")), key=natural_sort_key)
     for path in csvs:
         if "iso_18646_metrics" in path:

@@ -113,7 +113,7 @@ def dubins_RSR(a: float, b: float, d: float) -> Optional[Tuple[float, float, flo
 def dubins_LSR(a: float, b: float, d: float) -> Optional[Tuple[float, float, float, str]]:
     sa, sb = math.sin(a), math.sin(b)
     ca, cb = math.cos(a), math.cos(b)
-    p_sq = -2.0 + d * d + (2.0 * (ca * cb + sa * sb - d * (sa + sb)))
+    p_sq = -2.0 + d * d + (2.0 * (ca * cb + sa * sb + d * (sa + sb)))
     if p_sq < 0:
         return None
     p = math.sqrt(p_sq)
@@ -124,7 +124,7 @@ def dubins_LSR(a: float, b: float, d: float) -> Optional[Tuple[float, float, flo
 def dubins_RSL(a: float, b: float, d: float) -> Optional[Tuple[float, float, float, str]]:
     sa, sb = math.sin(a), math.sin(b)
     ca, cb = math.cos(a), math.cos(b)
-    p_sq = -2.0 + d * d + (2.0 * (ca * cb + sa * sb + d * (sa + sb)))
+    p_sq = -2.0 + d * d + (2.0 * (ca * cb + sa * sb - d * (sa + sb)))
     if p_sq < 0:
         return None
     p = math.sqrt(p_sq)
@@ -223,12 +223,12 @@ def sample_dubins_trajectory(
 
     pts = []
     s = 0.0
-    decel_dist = 0.75  # Décélération fluide sur les 75 derniers cm
+    decel_dist = 0.20  # Décélération fluide sur les 20 derniers cm
 
     while s < total_len:
         rem = total_len - s
         if rem <= decel_dist:
-            v = max(0.035, v_cruise * (rem / decel_dist))
+            v = max(0.05, v_cruise * (rem / decel_dist))
         elif s < 0.10:
             v = max(0.05, v_cruise * (s / 0.10))
         else:
@@ -247,8 +247,8 @@ def sample_dubins_trajectory(
         pts.append((x, y, th, v, w))
         s += v * dt
 
-    # Maintien stationnaire à l'arrivée terminale exacte (15 pas ~ 0.75s)
-    for _ in range(15):
+    # Maintien stationnaire à l'arrivée terminale exacte (8 pas ~ 0.40s)
+    for _ in range(8):
         pts.append((x1, y1, th1, 0.0, 0.0))
 
     return pts
@@ -270,11 +270,12 @@ def sample_reverse_hermite_trajectory(
 ) -> List[Tuple[float, float, float, float, float]]:
     """Génère une manœuvre de marche arrière continue et fluide (Classes 3, 4, 5)."""
     d = math.hypot(x0 - x1, y0 - y1)
-    L = 1.15 * d
+    L0 = 1.0 * d
+    L1 = 0.75 * d
     P0 = (x0, y0)
     P1 = (x1, y1)
-    M0 = (-L * math.cos(th0), -L * math.sin(th0))
-    M1 = (-L * math.cos(th1), -L * math.sin(th1))
+    M0 = (-L0 * math.cos(th0), -L0 * math.sin(th0))
+    M1 = (-L1 * math.cos(th1), -L1 * math.sin(th1))
 
     N_sub = 100
     sub_pts = []
@@ -295,13 +296,13 @@ def sample_reverse_hermite_trajectory(
 
     s = 0.0
     pts = []
-    decel_dist = 0.75
+    decel_dist = 0.20
 
     while s < total_len:
         u = min(1.0, s / total_len)
         rem = total_len - s
         if rem <= decel_dist:
-            v_mag = max(0.035, v_cruise * (rem / decel_dist))
+            v_mag = max(0.05, v_cruise * (rem / decel_dist))
         elif s < 0.10:
             v_mag = max(0.05, v_cruise * (s / 0.10))
         else:
@@ -340,7 +341,7 @@ def sample_reverse_hermite_trajectory(
         pts.append((x, y, th, v_lin, w))
         s += v_mag * dt
 
-    for _ in range(15):
+    for _ in range(8):
         pts.append((x1, y1, th1, 0.0, 0.0))
 
     return pts
@@ -365,7 +366,7 @@ def expert_rule_based_controller(
         return 0.0, 0.0, 9
 
     # Si très proche de la cible, correction purement angulaire vers theta = 0
-    if dist < 0.15:
+    if dist < 0.05:
         w = max(-0.45, min(0.45, -1.2 * e_theta))
         return 0.0, w, (7 if w > 0 else 8)
 
@@ -441,39 +442,60 @@ def generate_clean_scenarios() -> Tuple[List[Tuple[float, float, float]], List[T
             else:
                 fwd_scenarios.append((0.0, round(y, 2), th))
 
-    # 4. Tubes de perturbation (Covariate Shift) autour des scénarios d'évaluation canoniques
-    canonical_fwd = [
-        (-2.0, 2.0, 0.0),
-        (-2.5, 1.5, -math.pi / 2),
-        (-2.0, -2.0, math.pi),
-        (-1.5, -2.5, math.pi / 2),
-        (-2.2, 1.2, -math.pi / 4),
-        (-1.8, 1.8, math.pi / 3),
-        (-1.8, -1.8, -3 * math.pi / 4),
-        (-2.2, -1.2, 3 * math.pi / 4),
-    ]
-    canonical_rev = [
+    # 4. Tubes de perturbation (Covariate Shift) autour des 20 scénarios étendus du benchmark
+    extended_scenarios = [
+        # Q1 (+X, +Y)
+        (1.0, 0.8, 0.0),
         (2.0, 2.0, 0.0),
-        (1.5, 2.5, -math.pi / 2),
-        (2.0, -2.0, -math.pi / 2),
-        (2.5, -1.5, math.pi),
-        (1.8, 1.8, -math.pi / 3),
-        (2.2, 1.2, math.pi / 4),
-        (2.2, -1.2, -3 * math.pi / 4),
-        (1.8, -1.8, 3 * math.pi / 4),
+        (1.5, 2.5, -round(math.pi / 2, 3)),
+        (2.2, 1.2, round(math.pi / 4, 3)),
+        (3.0, 1.5, round(math.pi, 3)),
+        # Q2 (-X, +Y)
+        (-1.0, 0.8, 0.0),
+        (-2.0, 2.0, 0.0),
+        (-2.5, 1.5, -round(math.pi / 2, 3)),
+        (-2.2, 1.2, -round(math.pi / 4, 3)),
+        (-3.0, 2.0, round(math.pi / 4, 3)),
+        # Q3 (-X, -Y)
+        (-1.0, -0.8, round(math.pi, 3)),
+        (-2.0, -2.0, round(math.pi, 3)),
+        (-1.5, -2.5, round(math.pi / 2, 3)),
+        (-2.2, -1.2, round(3 * math.pi / 4, 3)),
+        (-3.0, -1.8, 0.0),
+        # Q4 (+X, -Y)
+        (1.0, -0.8, -round(math.pi / 2, 3)),
+        (2.0, -2.0, -round(math.pi / 2, 3)),
+        (2.5, -1.5, round(math.pi, 3)),
+        (2.2, -1.2, -round(math.pi / 4, 3)),
+        (3.0, -1.8, -round(3 * math.pi / 4, 3)),
     ]
 
-    for cx, cy, cth in canonical_fwd:
-        for dx in [-0.08, 0.0, 0.08]:
-            for dy in [-0.08, 0.0, 0.08]:
+    for cx, cy, cth in extended_scenarios:
+        for dx in [-0.15, 0.0, 0.15]:
+            for dy in [-0.15, 0.0, 0.15]:
                 for dth in [-0.15, 0.0, 0.15]:
-                    fwd_scenarios.append((round(cx + dx, 3), round(cy + dy, 3), round(cth + dth, 3)))
+                    px = round(cx + dx, 3)
+                    py = round(cy + dy, 3)
+                    pth = round(recast_angle(cth + dth), 3)
+                    if px <= 0:
+                        fwd_scenarios.append((px, py, pth))
+                    else:
+                        rev_scenarios.append((px, py, pth))
 
-    for cx, cy, cth in canonical_rev:
-        for dx in [-0.08, 0.0, 0.08]:
-            for dy in [-0.08, 0.0, 0.08]:
-                for dth in [-0.15, 0.0, 0.15]:
-                    rev_scenarios.append((round(cx + dx, 3), round(cy + dy, 3), round(cth + dth, 3)))
+    # 5. Funil terminal d'accostage haute densité (reprise de dataset-v1)
+    for fx in [-0.8, -0.6, -0.4, -0.2]:
+        for fy in [-0.4, -0.2, 0.0, 0.2, 0.4]:
+            for dx in [-0.08, 0.08]:
+                for dy in [-0.08, 0.08]:
+                    for th in [0.0, round(math.pi / 4, 3), round(-math.pi / 4, 3)]:
+                        fwd_scenarios.append((round(fx + dx, 2), round(fy + dy, 2), th))
+
+    for rx in [0.2, 0.4, 0.6, 0.8]:
+        for ry in [-0.4, -0.2, 0.0, 0.2, 0.4]:
+            for dx in [-0.08, 0.08]:
+                for dy in [-0.08, 0.08]:
+                    for th in [0.0, round(math.pi / 4, 3), round(-math.pi / 4, 3)]:
+                        rev_scenarios.append((round(rx + dx, 2), round(ry + dy, 2), th))
 
     return fwd_scenarios, rev_scenarios
 
@@ -481,36 +503,41 @@ def generate_clean_scenarios() -> Tuple[List[Tuple[float, float, float]], List[T
 def generate_terminal_alignment_samples() -> List[Dict[str, float]]:
     """
     Génère des échantillons d'alignement angulaire de haute précision au cais :
-    Dans la zone d'accostage (dist <= 0.15 m), si theta != 0, le robot effectue une rotation pure
-    (v = 0, w = -k * theta) pour forcer le cap à s'aligner exactement à theta = 0.
+    Dans la zone d'accostage R <= 0.15 m, si theta != 0, le robot effectue une rotation pure
+    ou une insertion régulée pour forcer le cap à converger exactement vers theta = 0.
     À l'équilibre parfait (x=0, y=0, theta=0), v=0 et w=0.
     """
     terminal_samples: List[Dict[str, float]] = []
-    
-    # 1. Échantillonnage d'orientations dans le voisinage immédiat de la cible
-    radii = [0.0, 0.03, 0.06, 0.10, 0.14]
+    radii = [0.0, 0.02, 0.05, 0.08, 0.12, 0.15]
     num_thetas = 36  # Discrétisation tous les 10 degrés sur [-pi, pi]
-    
+
     for r in radii:
-        num_pos_angles = 1 if r == 0.0 else 12
+        num_pos_angles = 1 if r == 0.0 else 16
         for p_idx in range(num_pos_angles):
             pos_angle = p_idx * (2.0 * math.pi / num_pos_angles)
             x_r = round(r * math.cos(pos_angle), 4)
             y_r = round(r * math.sin(pos_angle), 4)
-            
+
             for t_idx in range(num_thetas):
                 th = -math.pi + t_idx * (2.0 * math.pi / num_thetas)
                 th_r = round(recast_angle(th), 4)
-                
-                # À la cible exacte [0, 0, 0] -> arrêt parfait
-                if r < 0.02 and abs(th_r) < 0.04:
+
+                if r < 0.025 and abs(th_r) < 0.04:
                     v_r = 0.0
                     w_r = 0.0
-                else:
-                    # Correction purement angulaire vers theta = 0
+                elif r <= 0.06:
                     v_r = 0.0
                     w_r = round(max(-0.45, min(0.45, -1.2 * th_r)), 4)
-                
+                else:
+                    phi = math.atan2(-y_r, -x_r)
+                    alpha = recast_angle(phi - th_r)
+                    if abs(alpha) < math.pi / 4.0:
+                        v_r = round(max(0.04, 0.30 * r), 4)
+                        w_r = round(max(-0.45, min(0.45, 1.0 * alpha - 0.6 * th_r)), 4)
+                    else:
+                        v_r = 0.0
+                        w_r = round(max(-0.45, min(0.45, -1.2 * th_r)), 4)
+
                 terminal_samples.append({
                     "x_r": x_r,
                     "y_r": y_r,
@@ -536,7 +563,7 @@ def mirror_sample(s: Dict[str, float]) -> Dict[str, float]:
 def generate_rule_based_dataset(
     output_path: str = "data/curated/handcrafted_dataset.csv",
     apply_mirroring: bool = True,
-    stride: int = 5
+    stride: int = 2
 ) -> int:
     """
     Génère le dataset complet V2 à 5 colonnes (x_r, y_r, theta_r, v_r, w_r)
@@ -647,8 +674,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--stride",
         type=int,
-        default=5,
-        help="Facteur de sous-échantillonnage temporel des trajectoires (défaut: 5)"
+        default=2,
+        help="Facteur de sous-échantillonnage temporel des trajectoires (défaut: 2)"
     )
     args = parser.parse_args()
 

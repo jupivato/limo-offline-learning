@@ -1,126 +1,150 @@
-# LIMO Offline Learning : Apprentissage Hors Ligne et Clonage Comportemental pour Robot Mobile AgileX LIMO
+# LIMO Offline Learning — Branche `dataset-v2` : Mapping Relatif 5 Colonnes
 
 [![ROS 2](https://img.shields.io/badge/ROS_2-Humble%20%7C%20Foxy-blue.svg)](https://docs.ros.org/)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.x-EE4C2C.svg)](https://pytorch.org/)
 [![Norme ISO](https://img.shields.io/badge/Norme-ISO%2018646--2-green.svg)](https://www.iso.org/standard/66847.html)
 [![Affiliation](https://img.shields.io/badge/Recherche-CERV%20%2F%20ENIB-purple.svg)](https://www.enib.fr/)
+[![Branche](https://img.shields.io/badge/Branche-dataset--v2-orange.svg)](#)
 
-Ce projet implémente une loi de commande neuronale en boucle fermée pour la stabilisation et le positionnement du robot mobile **AgileX LIMO** sous **ROS 2**. L'approche repose sur l'**apprentissage supervisé par démonstration (*Learning from Demonstration - LfD*) / clonage comportemental (*Behavioral Cloning*)** à partir d'un jeu de données préparé manuellement (*handcrafted dataset*), avec une qualification métrologique conforme à la norme internationale **ISO 18646-2**.
-
----
-
-## 📌 Présentation Générale
-
-Dans les travaux précédents, l'entraînement du réseau de neurones était effectué en ligne par rétropropagation d'un gradient de coût calculé en temps réel (*online gradient descent*). Bien que fonctionnelle, cette approche présentait des risques mécaniques et d'instabilité en boucle ouverte dès que le taux d'apprentissage variait.
-
-Ce projet propose une alternative robuste et sécurisée :
-1. **Découplage Temporel et Sécurité** : L'apprentissage s'effectue entièrement **hors ligne** (*offline*). Aucun gradient n'est rétropropagé pendant le déplacement physique du robot, éliminant tout risque d'oscillations violentes ou de saturation moteur.
-2. **Génération par Règles Expertes (9 Manœuvres ENIB)** : La base d'apprentissage est construite de façon autonome par un **contrôleur expert à règles conditionnelles (`if / elif / else`)** implémentant formellement les **9 manœuvres canoniques de l'ENIB**, complétée ou substituable par des démonstrations en téléopération manuelle à 20 Hz.
-3. **Architecture PioneerNN Épurée (`bias=False`)** : Respect strict du perceptron multicouche 3-1000-2 avec activation `Tanh`. L'exclusion systématique des biais (`bias=False`) garantit la condition physique de repos à l'équilibre $f(0, 0, 0) = [0.0, 0.0]$, la préservation de la symétrie sagittale et l'exportation fidèle de ses **5 000 poids synaptiques** au format standard JSON (`input_weights`, `output_weights`).
-4. **Qualification Métrologique ISO 18646-2** : Évaluation rigoureuse de la précision de pose ($A_p, A_o$) et de la répétabilité de pose ($R_p, R_o$) en boucle fermée avec des poids gelés.
+Cette branche implémente la **Version 2** du pipeline d'apprentissage par clonage comportemental (*Behavioral Cloning*) pour le robot mobile **AgileX LIMO**. Elle fournit un environnement complet et reproductible permettant à tout utilisateur de générer son jeu de données, d'entraîner le modèle neuromorphique et de l'évaluer en boucle fermée sous ROS 2 / Gazebo.
 
 ---
 
-## 📐 Fondements Théoriques et Modélisation
+## 📌 Spécifications Techniques du Pipeline V2
 
-### Modèle Cinématique et Variables d'Entrée
+### 1. Schéma de Données Compact (5 Colonnes)
+Contrairement aux séries temporelles globales, cette branche utilise un format direct centré sur la cible relative :
+- **`x_r`** : Coordonnée X relative par rapport à la cible (m).
+- **`y_r`** : Coordonnée Y relative par rapport à la cible (m).
+- **`theta_r`** : Écart de cap angulaire recentré dans $[-\pi, \pi]$ (rad).
+- **`v_r`** : Consigne experte de vitesse linéaire (m/s).
+- **`w_r`** : Consigne experte de vitesse angulaire (rad/s).
 
-Le châssis différentiel du LIMO est repéré par sa pose `(x, y, θ)` et commandé par le vecteur de vitesses `(v_lin, v_ang)`.  
-Les 3 entrées normalisées transmises au réseau de neurones sont :
+### 2. Modèle Cinématique et Génération Analytique
+- **Marche avant ($x \le 0$)** : Trajectoires lisses basées sur les **courbes de Dubins** avec rayon de courbure minimal ($R_{\min} = 0.42\text{ m}$).
+- **Marche arrière et accostage ($x \ge 0$)** : Manœuvres fluides générées par **splines cubiques d'Hermite**.
+- **Stabilisation terminale** : Funil d'alignement angulaire haute densité au quai forçant l'orientation finale vers $\theta = 0$.
 
-- **`in_0`** = `(x - x_cible) × α_x`
-- **`in_1`** = `(y - y_cible) × α_y`
-- **`in_2`** = `(recast(θ - θ_cible) - θ_s(x, y)) × α_θ`
+### 3. Architecture PioneerNN sans Biais (`use_bias=False`)
+Le perceptron multicouche (3 entrées $\to$ 1 000 neurones cachés $\to$ 2 sorties, activation `Tanh`) est configuré sans biais synaptiques :
+$$\mathbf{y}(\mathbf{0}) = \tanh(W_2 \cdot \tanh(W_1 \cdot \mathbf{0})) = [0.0\text{ m/s}, 0.0\text{ rad/s}]^T$$
+Cette propriété garantit l'arrêt strict à l'équilibre et empêche toute dérive résiduelle au point d'accostage.
 
-Avec :
-- Facteurs d'échelle : **`α = [1/3, 1/3, 1/π]`**
-- Orientation stratégique (évite les minima locaux) : **`θ_s(x, y) = tanh(10·x) · arctan(1·y)`**
+### 4. Recalage Odométrique dans ROS 2 ($SO(2)$)
+L'interface matérielle/simulation projette les coordonnées odometriques selon la matrice de rotation dans le plan, rendant le guidage invariant quel que soit le cap initial $\theta_0$ de démarrage.
 
-### Fonction de Perte Hors Ligne (MSE)
+---
 
-L'entraînement optimise les poids synaptiques en minimisant l'erreur quadratique moyenne entre les vitesses prédites et les vitesses de démonstration :
+## 📂 Organisation des Fichiers
 
 ```text
-Loss = (1 / N) · Σ [ (v_lin_pred - v_lin_demo)² + β · (v_ang_pred - v_ang_demo)² ]
-```
-
-Où :
-- **`v_lin_pred`**, **`v_ang_pred`** : vitesses linéaire et angulaire prédites par le réseau.
-- **`v_lin_demo`**, **`v_ang_demo`** : vitesses de consigne issues de la démonstration experte.
-- **`β`** : coefficient de pondération angulaire (par défaut `β = 1.0`).
-- **`N`** : nombre d'échantillons du lot (*batch*).
-
----
-
-## 📂 Architecture du Dépôt
-
-```text
-limo-offline-learning/
-├── .agents/                    # Compétences et runbooks Antigravity
-│   └── skills/
-│       ├── limo-ros2-env/
-│       ├── limo-dataset-curator/
-│       ├── pioneer-offline-trainer/
-│       └── iso-18646-evaluator/
-├── config/                     # Paramètres d'apprentissage et configurations cibles
+limo-offline-learning/ (branche: dataset-v2)
+├── calculus/
+│   └── calculate_iso_metrics.py         # Module de calcul des métriques normalisées ISO 18646-2
+├── config/                              # Fichiers de configuration
 ├── data/
-│   ├── raw/                    # Données brutes de téléopération (.csv)
-│   ├── curated/                # Jeux de données nettoyés et équilibrés
-│   └── augmented/              # Données augmentées par symétrie bilatérale
-├── docs/                       # Planification détaillée et documentation technique
-├── models/                     # Poids du réseau exportés au format JSON
+│   ├── curated/                         # Dossier cible pour le dataset généré (handcrafted_dataset.csv)
+│   ├── evaluation/                      # Dossier cible pour les logs de télémétrie et visualisations
+│   └── raw/                             # Démonstrations manuelles optionnelles
+├── docs/
+│   └── PLANIFICATION_APPRENTISSAGE_HORS_LIGNE.md  # Planification expérimentale
+├── models/
+│   └── supervised_w_torch_diff.json     # Fichier de destination des poids entraînés (format JSON standard)
 ├── src/
-│   ├── core/                   # PioneerNN (bias=False, 5000 poids) et sérialiseur JSON
-│   ├── data/                   # Contrôleur expert à règles et curateur de données
-│   │   ├── generate_rule_based_dataset.py  # Générateur if/else (9 manœuvres ENIB)
-│   │   └── curate_dataset.py               # Curateur, filtrage statique et miroir
-│   ├── ros2/                   # Interface ROS 2 (/odom et /cmd_vel à 20 Hz)
-│   ├── teleop/                 # Nœud de téléopération et enregistrement (20 Hz)
-│   ├── training/               # Entraînement hors ligne (MSE Loss + AdamW)
-│   └── evaluation/             # Exécution autonome en boucle fermée
-├── calculus/                   # Calcul des métriques ISO 18646-2
-├── requirements.txt            # Dépendances Python
-└── README.md
+│   ├── core/
+│   │   └── pioneer_nn.py                # Définition du réseau PioneerNN (3->1000->2, Tanh)
+│   ├── data/
+│   │   ├── generate_rule_based_dataset.py # Générateur analytique Dubins + Hermite (5 colonnes)
+│   │   └── curate_dataset.py            # Filtrage et augmentation symétrique
+│   ├── evaluation/
+│   │   ├── benchmark_visualizer.py      # Générateur de tracés de trajectoires et dashboard web
+│   │   ├── data_logger.py               # Enregistreur temps réel de télémétrie (20 Hz)
+│   │   ├── run_autonomous.py            # Contrôleur autonome en boucle fermée
+│   │   └── run_batch_benchmark.py       # Banc de test multi-scénarios ISO 18646-2
+│   ├── ros2/
+│   │   └── limo_interface.py           # Interface ROS 2 (/odom et /cmd_vel) avec recalage SO(2)
+│   ├── teleop/
+│   │   └── collect_demonstrations.py    # Nœud d'acquisition joystick / clavier à 20 Hz
+│   └── training/
+│       ├── plot_training_curves.py      # Outil de tracé des courbes de perte MSE
+│       └── train_offline.py             # Pipeline d'entraînement PyTorch (AdamW + Scheduler)
+├── requirements.txt                     # Dépendances Python
+└── README.md                            # Documentation de la branche
 ```
 
 ---
 
-## 🚀 Guide d'Utilisation
+## 🚀 Guide d'Utilisation : Exécuter le Pipeline
 
 ### 1. Installation des Dépendances
+Dans votre environnement virtuel Python :
 ```bash
 pip install -r requirements.txt
 ```
 
-### 2. Génération du Jeu de Données par Règles Expertes (Recommandé)
-Générer automatiquement des dizaines de milliers d'échantillons couvrant les **9 manœuvres canoniques de l'ENIB** dans les 4 quadrants via l'expert conditionnel `if / elif / else` :
+### 2. Générer le Jeu de Données V2 (5 Colonnes)
+Générez l'ensemble des trajectoires analytiques pour l'ensemble des quadrants :
 ```bash
-python3 -m src.data.generate_rule_based_dataset --output data/curated/handcrafted_dataset.csv
+python3 -m src.data.generate_rule_based_dataset \
+    --output data/curated/handcrafted_dataset.csv \
+    --stride 2
 ```
 
-> **Alternative (Téléopération Manuelle)** :
-> Si vous souhaitez capturer des trajectoires au joystick/clavier :
-> ```bash
-> # A. Enregistrement en direct à 20 Hz vers la cible :
-> python3 -m src.teleop.collect_demonstrations --target 0.0 0.0 0.0
-> # B. Curage et symétrie sagittale bilatérale :
-> python3 -m src.data.curate_dataset --input-dir data/raw/ --output data/curated/handcrafted_dataset.csv
-> ```
-
-### 3. Entraînement Hors Ligne (Behavioral Cloning)
-Entraîner le perceptron `PioneerNN` (5 000 poids synaptiques, sans biais) et exporter le modèle au format JSON standard :
+### 3. Lancer l'Entraînement Supervisé Hors Ligne
+Entraînez le réseau de neurones et exportez automatiquement le modèle JSON dans `models/` :
 ```bash
-python3 -m src.training.train_offline --dataset data/curated/handcrafted_dataset.csv --epochs 100 --batch-size 64
+python3 -m src.training.train_offline \
+    --dataset data/curated/handcrafted_dataset.csv \
+    --epochs 100 \
+    --batch-size 256 \
+    --lr 0.001 \
+    --no-bias \
+    --patience 15
 ```
 
-### 4. Évaluation Autonome en Boucle Fermée
-Exécuter la politique apprise avec poids gelés sous Gazebo ou sur robot réel :
+### 4. Visualiser la Convergence de l'Entraînement
+Générez les courbes d'évolution de la fonction de perte (PNG haute résolution et SVG vectoriel) :
 ```bash
-python3 -m src.evaluation.run_autonomous --weights models/supervised_w_torch_diff.json --target 0.0 0.0 0.0
+python3 -m src.training.plot_training_curves \
+    --history models/training_history.json \
+    --outdir data/evaluation
 ```
 
-### 5. Benchmark Métrologique ISO 18646-2
-Calculer la précision ($A_p, A_o$) et la répétabilité ($R_p, R_o$) de pose à partir de la télémétrie :
+### 5. Tester la Navigation en Boucle Fermée (Unitaire)
+Lancez la commande neuronale en simulation Gazebo ou sur le robot réel :
 ```bash
-python3 calculus/calculate_iso_metrics.py
+python3 -m src.evaluation.run_autonomous \
+    --weights models/supervised_w_torch_diff.json \
+    --target 0.0 0.0 0.0
 ```
+
+### 6. Lancer le Banc de Test Multi-Configurations & Calcul ISO 18646-2
+Exécutez la batterie complète des 20 configurations de référence :
+```bash
+python3 -m src.evaluation.run_batch_benchmark \
+    --weights models/supervised_w_torch_diff.json \
+    --timeout 60.0 \
+    --outdir data/evaluation/batch_run
+```
+
+Pour générer la vue synthétique de toutes vos trajectoires enregistrées :
+```bash
+python3 -m src.evaluation.benchmark_visualizer --batch-dir data/evaluation/batch_run
+```
+
+---
+
+## 🧭 Navigation entre les Branches
+
+- **`main`** : Présentation globale du projet et comparaison des types de datasets.
+  ```bash
+  git checkout main
+  ```
+- **`dataset-v1`** : Première itération (jeu de données continu 19 colonnes à 20 Hz).
+  ```bash
+  git checkout dataset-v1
+  ```
+- **`dataset-v2`** : Branche courante (jeu de données relatif 5 colonnes, sans biais).
+  ```bash
+  git checkout dataset-v2
+  ```

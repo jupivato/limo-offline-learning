@@ -24,6 +24,14 @@ import csv
 import argparse
 from typing import List, Dict, Any, Optional
 
+# Inclusion automatique du chemin dist-packages snap si présent
+for _p in [
+    os.path.expanduser("~/local/lib/python3.14/dist-packages"),
+    os.path.expanduser("~/snap/antigravity-cli/common/local/lib/python3.14/dist-packages")
+]:
+    if os.path.exists(_p) and _p not in sys.path:
+        sys.path.insert(0, _p)
+
 from src.core.pioneer_nn import PioneerNN
 from src.evaluation.data_logger import DataLogger
 from calculus.calculate_iso_metrics import compute_iso_18646_metrics

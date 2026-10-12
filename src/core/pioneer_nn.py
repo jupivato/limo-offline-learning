@@ -18,8 +18,17 @@ Projet : LIMO Offline Learning (CERV / ENIB)
 
 import json
 import os
+import sys
 import math
 from typing import Dict, Any, Union, List, Optional
+
+# Inclusion automatique du chemin dist-packages snap si présent
+for _p in [
+    os.path.expanduser("~/local/lib/python3.14/dist-packages"),
+    os.path.expanduser("~/snap/antigravity-cli/common/local/lib/python3.14/dist-packages")
+]:
+    if os.path.exists(_p) and _p not in sys.path:
+        sys.path.insert(0, _p)
 
 try:
     import torch

@@ -13,6 +13,8 @@ Fonctionnalités :
 Projet : LIMO Offline Learning (CERV / ENIB)
 """
 
+from __future__ import annotations
+
 import math
 import time
 import threading
@@ -24,9 +26,11 @@ try:
     from geometry_msgs.msg import Twist
     from nav_msgs.msg import Odometry
     ROS2_AVAILABLE = True
-except ImportError:
+except (ImportError, ModuleNotFoundError):
     ROS2_AVAILABLE = False
     Node = object  # Remplacement pour environnement hors-ROS
+    Twist = object
+    Odometry = object
 
 
 class LimoROS2Interface(Node):
@@ -60,6 +64,9 @@ class LimoROS2Interface(Node):
         # Pose interne du robot [x, y, theta] et décalage d'origine
         self._position = [0.0, 0.0, 0.0]
         self._raw_position = [0.0, 0.0, 0.0]
+        self._raw_origin = [0.0, 0.0, 0.0]
+        self._target_origin = [0.0, 0.0, 0.0]
+        self._offset_th = 0.0
         self._offset = [0.0, 0.0, 0.0]
         self._lock = threading.Lock()
         self._odom_received = False
@@ -84,6 +91,7 @@ class LimoROS2Interface(Node):
         """
         Callback de traitement des messages Odometry.
         Extrait la position cartésienne et convertit le quaternion en orientation lacet (yaw).
+        Applique la matrice de rotation 2D SO(2) par rapport à l'angle initial d'étalonnage.
         """
         pos_x = float(msg.pose.pose.position.x)
         pos_y = float(msg.pose.pose.position.y)
@@ -96,13 +104,18 @@ class LimoROS2Interface(Node):
 
         with self._lock:
             self._raw_position = [pos_x, pos_y, theta]
+            dx_raw = pos_x - self._raw_origin[0]
+            dy_raw = pos_y - self._raw_origin[1]
+            diff_th = self._offset_th
+            dx_world = dx_raw * math.cos(diff_th) - dy_raw * math.sin(diff_th)
+            dy_world = dx_raw * math.sin(diff_th) + dy_raw * math.cos(diff_th)
             adj_theta = math.atan2(
-                math.sin(theta + self._offset[2]),
-                math.cos(theta + self._offset[2])
+                math.sin(theta + diff_th),
+                math.cos(theta + diff_th)
             )
             self._position = [
-                pos_x + self._offset[0],
-                pos_y + self._offset[1],
+                self._target_origin[0] + dx_world,
+                self._target_origin[1] + dy_world,
                 adj_theta
             ]
             self._odom_received = True
@@ -115,6 +128,9 @@ class LimoROS2Interface(Node):
         with self._lock:
             raw_x, raw_y, raw_th = self._raw_position
             diff_th = math.atan2(math.sin(theta0 - raw_th), math.cos(theta0 - raw_th))
+            self._raw_origin = [raw_x, raw_y, raw_th]
+            self._target_origin = [x0, y0, theta0]
+            self._offset_th = diff_th
             self._offset = [x0 - raw_x, y0 - raw_y, diff_th]
             self._position = [x0, y0, theta0]
         print(f"[LimoROS2Interface] Pose réinitialisée à : x={x0:.2f} m, y={y0:.2f} m, theta={theta0:.2f} rad")
