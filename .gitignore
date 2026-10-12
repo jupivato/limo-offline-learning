@@ -34,12 +34,14 @@ ENV/
 # PyTorch checkpoints and generated datasets (large files)
 *.pt
 *.pth
-data/raw/*.csv
-data/augmented/*.csv
-data/curated/*.csv
-data/curated/*.svg
-data/curated/*.html
-data/evaluation/
+data/raw/**/*.csv
+data/augmented/**/*.csv
+data/curated/**/*.csv
+data/curated/**/*.svg
+data/curated/**/*.html
+data/evaluation/**
+!data/evaluation/**/
+!data/evaluation/**/.gitkeep
 res/
 *.log
 
@@ -47,13 +49,11 @@ res/
 *.png
 *.jpg
 *.svg
-models/training_history.json
+models/**/training_history.json
 
 # Keep empty data folders tracked
-!data/raw/.gitkeep
-!data/curated/.gitkeep
-!data/augmented/.gitkeep
-!models/.gitkeep
+!data/**/.gitkeep
+!models/**/.gitkeep
 
 # IDEs and OS files
 .vscode/

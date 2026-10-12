@@ -1,0 +1,21 @@
+{
+    "approach": "v2_relative",
+    "description": "Apprentissage hors ligne V2 par mapping relatif 5 colonnes (Dubins + Hermite) sans biais",
+    "dataset": {
+        "schema": "5_columns",
+        "path": "data/curated/v2/handcrafted_dataset.csv",
+        "stride": 2
+    },
+    "model": {
+        "architecture": "PioneerNN",
+        "input_size": 3,
+        "hidden_size": 1000,
+        "output_size": 2,
+        "use_bias": false,
+        "weights_path": "models/v2/supervised_w_torch_diff.json",
+        "history_path": "models/v2/training_history.json"
+    },
+    "evaluation": {
+        "output_dir": "data/evaluation/v2/batch_run"
+    }
+}

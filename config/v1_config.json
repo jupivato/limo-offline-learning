@@ -1,0 +1,21 @@
+{
+    "approach": "v1_timeseries",
+    "description": "Apprentissage hors ligne V1 par séries temporelles 19 colonnes et 9 manœuvres canoniques ENIB",
+    "dataset": {
+        "schema": "19_columns",
+        "path": "data/curated/v1/handcrafted_dataset.csv",
+        "frequency_hz": 20
+    },
+    "model": {
+        "architecture": "PioneerNN",
+        "input_size": 3,
+        "hidden_size": 1000,
+        "output_size": 2,
+        "use_bias": true,
+        "weights_path": "models/v1/supervised_w_torch_diff.json",
+        "history_path": "models/v1/training_history.json"
+    },
+    "evaluation": {
+        "output_dir": "data/evaluation/v1/batch_run"
+    }
+}

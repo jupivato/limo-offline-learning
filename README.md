@@ -1,117 +1,212 @@
-# LIMO Offline Learning : Apprentissage Supervisé Hors Ligne et Contrôle Neuromorphique
+# LIMO Offline Learning : Framework Modulaire d'Apprentissage Hors Ligne et de Benchmarking
 
 [![ROS 2](https://img.shields.io/badge/ROS_2-Humble%20%7C%20Foxy-blue.svg)](https://docs.ros.org/)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.x-EE4C2C.svg)](https://pytorch.org/)
-[![Norme ISO](https://img.shields.io/badge/Norme-ISO%2018646--2-green.svg)](https://www.iso.org/standard/66847.html)
+[![Norme ISO](https://img.shields.io/badge/Norme-ISO%2018646--2-brightgreen.svg)](https://www.iso.org/standard/66847.html)
 [![Affiliation](https://img.shields.io/badge/Recherche-CERV%20%2F%20ENIB-purple.svg)](https://www.enib.fr/)
+[![Architecture](https://img.shields.io/badge/Architecture-Modulaire%20Multi--Approches-blueviolet.svg)](#)
 
-Ce dépôt contient le framework de commande neuronale en boucle fermée pour la navigation et l'accostage du robot mobile **AgileX LIMO** sous **ROS 2**. Développé dans le cadre des activités de recherche au **Centre Européen de Réalité Virtuelle (CERV)** et à l'**École Nationale d'Ingénieurs de Brest (ENIB)**, ce projet implémente l'apprentissage supervisé par démonstration (*Learning from Demonstration - LfD*) / clonage comportemental (*Behavioral Cloning*) avec un protocole de qualification métrologique basé sur la norme internationale **ISO 18646-2**.
+Ce dépôt héberge un **framework modulaire unifié** de commande neuronale en boucle fermée pour le robot mobile **AgileX LIMO** sous **ROS 2**. Développé dans le cadre du **Projet Pluridisciplinaire en Équipe (PPE)** au **Centre Européen de Réalité Virtuelle (CERV)** et à l'**École Nationale d'Ingénieurs de Brest (ENIB)**, ce projet permet de développer, entraîner, évaluer et **comparer rigoureusement** différentes approches d'apprentissage par clonage comportemental (*Behavioral Cloning / Learning from Demonstration*) selon la norme internationale **ISO 18646-2**.
 
 ---
 
-## 🔀 Organisation des Branches du Dépôt
+## 🏛️ Architecture Modulaire du Framework
 
-Le projet est structuré en **branches d'expérimentation indépendantes**. Chaque branche implémente un **type de test spécifique** reposant sur un **format de jeu de données (*dataset*) distinct**, avec sa propre logique de génération et d'apprentissage :
+Le projet est structuré pour permettre la coexistence de plusieurs vertentes d'apprentissage indépendantes tout en partageant les composants matériels, cinématiques et métrologiques communs :
 
 ```mermaid
 graph TD
-    Main["main (Vue Générale & Fondements)"]
-    V1["dataset-v1 (Test Itération 1)\n• Séries temporelles continues (19 colonnes à 20 Hz)\n• 9 manœuvres canoniques ENIB\n• Biais synaptiques activés (use_bias=True)"]
-    V2["dataset-v2 (Test Itération 2)\n• Mapping relatif spatial (5 colonnes)\n• Trajectoires analytiques Dubins + Hermite\n• Réseau strictly sans biais (use_bias=False)\n• Recalage odométrique SO(2)"]
+    subgraph Noyau Commun [Composants Communs Partagés]
+        Core["src/core/ : Architecture PioneerNN (MLP 3->1000->2)"]
+        ROS["src/ros2/ : Interface ROS 2 (/odom, /cmd_vel) avec recalage SO(2)"]
+        Eval["src/evaluation/ : Banc d'essais batch & DataLogger 20 Hz"]
+        Calc["calculus/ : Calculateur métrologique ISO 18646-2 (Ap, Ao, Rp, Ro)"]
+    end
 
-    Main -.->|Exploration| V1
-    Main -.->|Production recommandée| V2
+    subgraph Approches [Vertentes d'Apprentissage Modulaires]
+        V1["src/approaches/v1_timeseries/\n• Dataset temporel continu (19 colonnes à 20 Hz)\n• 9 manœuvres canoniques ENIB\n• Réseau avec biais (use_bias=True)"]
+        V2["src/approaches/v2_relative/\n• Mapping spatial direct (5 colonnes relatives)\n• Dubins + Hermite + Funil terminal\n• Réseau sans biais (use_bias=False)"]
+        Vn["src/approaches/v3_.../\n• Prêt pour de futures approches (Offline RL, etc.)"]
+    end
+
+    subgraph Comparaison [Suite Comparative Inter-Approches]
+        CmpBench["src/comparison/compare_benchmarks.py\n• Superposition des trajectoires 2D\n• Graphiques en barres des métriques ISO\n• Dashboard HTML comparatif autonome"]
+        CmpData["src/comparison/compare_datasets.py\n• Distributions des vitesses (v_lin, v_ang)\n• Cartographie de la couverture spatiale"]
+    end
+
+    Core --> V1
+    Core --> V2
+    Core --> Vn
+    ROS --> Eval
+    Eval --> CmpBench
+    Calc --> CmpBench
 ```
 
 ---
 
-### 📋 Présentation des Branches et Types de Datasets
+## 📂 Organisation Séparée des Dossiers (Données, Modèles et Évaluations)
 
-#### 1. Branche `main` *(Cette Branche)*
-- **Rôle** : Référentiel central, présentation globale de l'architecture logicielle, formalisation mathématique et guide de navigation.
-- **Utilisation** :
-  ```bash
-  git checkout main
-  ```
+Chaque approche dispose de ses propres espaces dédiés pour stocker ses jeux de données, ses poids de réseaux et ses résultats d'évaluation :
 
-#### 2. Branche `dataset-v1` *(Test Itération 1 — Séries Temporelles 19 Colonnes)*
-- **Type de Dataset** : Séries temporelles complètes enregistrées à 20 Hz selon un schéma à **19 colonnes** (`timestamp`, $x, y, \theta$, $t_x, t_y, t_\theta$, $e_x, e_y, e_\theta$, $in_0, in_1, in_2$, $v_{\text{lin}}, v_{\text{ang}}$, vitesses de roues, identifiant de manœuvre, quadrant).
-- **Type de Test** : Évaluation du clonage comportemental sur les **9 manœuvres canoniques de l'ENIB** avec cibles arbitraires et réseau avec biais synaptiques (`use_bias=True`).
-- **Utilisation** :
-  ```bash
-  git checkout dataset-v1
-  ```
-  Consultez le [README de la branche dataset-v1](https://github.com/jupivato/limo-offline-learning/tree/dataset-v1).
-
-#### 3. Branche `dataset-v2` *(Test Itération 2 — Mapping Relatif 5 Colonnes)*
-- **Type de Dataset** : Schéma compact et direct à **5 colonnes relatives** (`x_r, y_r, theta_r, v_r, w_r`) systématiquement centrées sur la cible relative $(0, 0, 0)$.
-- **Type de Test** : Trajectoires analytiques hybrides (**courbes de Dubins** pour l'avance et **splines d'Hermite** pour le recul), **funil terminal d'alignement angulaire pour $\theta \to 0$**, perceptron strictly sans biais (**`use_bias=False`**) garantissant mathématiquement l'arrêt absolu à l'origine, et correction odométrique par **matrice de rotation $SO(2)$**.
-- **Utilisation** :
-  ```bash
-  git checkout dataset-v2
-  ```
-  Consultez le [README de la branche dataset-v2](https://github.com/jupivato/limo-offline-learning/tree/dataset-v2).
+```text
+limo-offline-learning/
+├── calculus/
+│   └── calculate_iso_metrics.py         # Calcul normalisé ISO 18646-2 partagé
+├── config/
+│   ├── v1_config.json                   # Configuration de l'approche V1
+│   └── v2_config.json                   # Configuration de l'approche V2
+├── data/
+│   ├── raw/
+│   │   ├── v1/                          # Démonstrations brutes pour V1
+│   │   └── v2/                          # Démonstrations brutes pour V2
+│   ├── curated/
+│   │   ├── v1/                          # handcrafted_dataset.csv (19 colonnes)
+│   │   └── v2/                          # handcrafted_dataset.csv (5 colonnes)
+│   └── evaluation/
+│       ├── v1/                          # Télémétries et logs d'évaluation V1
+│       ├── v2/                          # Télémétries et logs d'évaluation V2
+│       └── comparison/                  # Graphiques et dashboards comparatifs V1 vs V2
+├── docs/
+│   ├── PLANIFICATION_APPRENTISSAGE_HORS_LIGNE.md  # Planification expérimentale
+│   ├── v1/
+│   │   └── SPECIFICATION_V1.md          # Spécification détaillée V1
+│   └── v2/
+│       └── SPECIFICATION_V2.md          # Spécification détaillée V2
+├── models/
+│   ├── v1/                              # Poids optimisés V1 (supervised_w_torch_diff.json)
+│   └── v2/                              # Poids optimisés V2 (supervised_w_torch_diff.json)
+├── src/
+│   ├── core/
+│   │   └── pioneer_nn.py                # Perceptron PioneerNN unifié (support use_bias=True/False)
+│   ├── ros2/
+│   │   └── limo_interface.py            # Interface ROS 2 avec recalage SO(2)
+│   ├── teleop/
+│   │   └── collect_demonstrations.py    # Enregistreur téléopération à 20 Hz
+│   ├── evaluation/
+│   │   ├── data_logger.py               # Enregistreur temps réel à 20 Hz
+│   │   ├── run_autonomous.py            # Contrôleur autonome en boucle fermée
+│   │   ├── run_batch_benchmark.py       # Exécuteur batch multi-scénarios
+│   │   └── benchmark_visualizer.py      # Tracé des sessions individuelles
+│   ├── approaches/
+│   │   ├── v1_timeseries/               # VERTENTE V1 (Séries temporelles 19 colonnes)
+│   │   │   ├── generate_dataset.py      # Générateur 19 colonnes (9 manœuvres ENIB)
+│   │   │   ├── curate_dataset.py        # Curateur et symétrie bilatérale
+│   │   │   ├── train_offline.py         # Entraînement V1 (use_bias=True)
+│   │   │   ├── export_visualizer.py     # Visualiseur interactif V1
+│   │   │   └── plot_distribution.py     # Graphiques de distribution V1
+│   │   └── v2_relative/                 # VERTENTE V2 (Mapping relatif 5 colonnes)
+│   │       ├── generate_dataset.py      # Générateur 5 colonnes (Dubins + Hermite + funil)
+│   │       ├── curate_dataset.py        # Curateur et miroir V2
+│   │       ├── train_offline.py         # Entraînement V2 (use_bias=False)
+│   │       └── plot_curves.py           # Outil de tracé des courbes d'entraînement
+│   └── comparison/                      # MODULE COMPARATIF INTER-APPROCHES
+│       ├── compare_datasets.py          # Comparaison statistique des datasets
+│       └── compare_benchmarks.py        # Superposition des trajectoires & métriques ISO
+├── requirements.txt
+└── README.md
+```
 
 ---
 
-## 📊 Matrice Méthodologique des Versions de Dataset
+## 📊 Matrice Synthétique des Approches
 
-| Dimension | Branche `dataset-v1` | Branche `dataset-v2` |
+| Caractéristique | Approche V1 (`v1_timeseries`) | Approche V2 (`v2_relative`) |
 | :--- | :--- | :--- |
-| **Format du Dataset** | 19 colonnes temporelles | **5 colonnes relatives** |
-| **Repère spatial** | Coordonnées globales + cibles arbitraires | **Repère relatif centré cible $(0, 0, 0)$** |
-| **Génération des trajectoires** | Intégration cinématique continue à 20 Hz | **Analytique : Dubins ($x \le 0$) + Hermite ($x \ge 0$)** |
-| **Alignement terminal** | Non contraint | **Funil haute densité orienté $\theta \to 0$** |
-| **Architecture Réseau** | `PioneerNN` avec biais (`use_bias=True`) | **`PioneerNN` sans biais (`use_bias=False`)** |
-| **Garantie d'équilibre** | Dépend de la convergence des poids | **Mathématique : $\text{MLP}(\vec{0}) = \vec{0}$** |
-| **Recalage Odométrique** | Décalage cartésien simple | **Matrice de rotation 2D $SO(2)$** |
+| **Philosophie** | Séries temporelles d'Euler à 20 Hz | Cartographie spatiale relative continue |
+| **Format du Dataset** | 19 colonnes complètes | **5 colonnes directes** (`x_r, y_r, theta_r, v_r, w_r`) |
+| **Génération** | 9 manœuvres canoniques ENIB | **Courbes de Dubins ($x \le 0$) + Splines d'Hermite ($x \ge 0$)** |
+| **Zone d'Accostage** | Non contrainte | **Funil terminal haute densité orienté $\theta \to 0$** |
+| **Biais Neuronaux** | Activés (`use_bias=True`) | **Désactivés (`use_bias=False`, garantie $\text{MLP}(\vec{0}) = \vec{0}$)** |
+| **Dossier Dataset** | `data/curated/v1/` | `data/curated/v2/` |
+| **Dossier Modèle** | `models/v1/` | `models/v2/` |
+| **Dossier Évaluation** | `data/evaluation/v1/` | `data/evaluation/v2/` |
 
 ---
 
-## 📐 Modélisation Commune et Contrôleur Neuromorphique
+## 🚀 Guide d'Utilisation : Exécution et Comparaison
 
-### 1. Variables d'Entrée Normalisées
-Le châssis différentiel du LIMO est guidé par 3 variables normalisées transmises au réseau de neurones :
-- **`in_0`** = $(x - x_{\text{cible}}) \times \alpha_x$
-- **`in_1`** = $(y - y_{\text{cible}}) \times \alpha_y$
-- **`in_2`** = $(\text{recast}(\theta - \theta_{\text{cible}}) - \theta_s(x, y)) \times \alpha_\theta$
-
-Avec :
-- Facteurs d'échelle : $\boldsymbol{\alpha} = [1/3, 1/3, 1/\pi]$
-- Orientation stratégique (évitement des minima locaux) : $\theta_s(x, y) = \tanh(10\cdot x) \cdot \arctan(1\cdot y)$
-
-### 2. Architecture PioneerNN
-- Perceptron multicouche (MLP) à 3 entrées, 1 couche cachée de 1 000 neurones et 2 sorties $(v_{\text{lin}}, v_{\text{ang}})$.
-- Activation : $\tanh$ (tangente hyperbolique).
-- Sérialisation : Fichier JSON standard (`input_weights`, `output_weights`) totalisant 5 000 poids synaptiques.
+### 1. Installation de l'Environnement
+```bash
+pip install -r requirements.txt
+```
 
 ---
 
-## 🚀 Démarrage Rapide
+### 2. Pipeline de l'Approche V1 (Séries Temporelles)
 
-### 1. Cloner le Dépôt
 ```bash
-git clone https://github.com/jupivato/limo-offline-learning.git
-cd limo-offline-learning
+# A. Générer le dataset V1 (19 colonnes)
+python3 -m src.approaches.v1_timeseries.generate_dataset
+
+# B. Entraîner le modèle V1
+python3 -m src.approaches.v1_timeseries.train_offline
+
+# C. Évaluer sous Gazebo / simulation et enregistrer les télémétries
+python3 -m src.evaluation.run_batch_benchmark \
+    --weights models/v1/supervised_w_torch_diff.json \
+    --outdir data/evaluation/v1/batch_run
 ```
 
-### 2. Basculer sur la Branche Souhaitée
+---
 
-#### Pour le pipeline V2 (recommandé) :
+### 3. Pipeline de l'Approche V2 (Mapping Relatif)
+
 ```bash
-git checkout dataset-v2
-pip install -r requirements.txt
-python3 -m src.data.generate_rule_based_dataset --output data/curated/handcrafted_dataset.csv --stride 2
-python3 -m src.training.train_offline --dataset data/curated/handcrafted_dataset.csv --no-bias
+# A. Générer le dataset V2 (5 colonnes)
+python3 -m src.approaches.v2_relative.generate_dataset --stride 2
+
+# B. Entraîner le modèle V2 (sans biais)
+python3 -m src.approaches.v2_relative.train_offline --no-bias --epochs 100
+
+# C. Tracer les courbes de convergence de la perte MSE
+python3 -m src.approaches.v2_relative.plot_curves
+
+# D. Évaluer sous Gazebo / simulation et enregistrer les télémétries
+python3 -m src.evaluation.run_batch_benchmark \
+    --weights models/v2/supervised_w_torch_diff.json \
+    --outdir data/evaluation/v2/batch_run
 ```
 
-#### Pour le pipeline V1 (expérimentation 19 colonnes) :
+---
+
+### 4. 🔬 Module Comparatif Inter-Approches
+
+Une fois les évaluations des approches exécutées, lancez les outils de comparaison pour analyser les différences :
+
+#### A. Comparaison Statistique des Datasets
+Compare les distributions de vitesses ($v_{\text{lin}}, v_{\text{ang}}$), le nombre d'échantillons et la dispersion spatiale :
 ```bash
-git checkout dataset-v1
-pip install -r requirements.txt
-python3 -m src.data.generate_rule_based_dataset --output data/curated/handcrafted_dataset.csv
-python3 -m src.training.train_offline --dataset data/curated/handcrafted_dataset.csv
+python3 -m src.comparison.compare_datasets \
+    --v1-dataset data/curated/v1/handcrafted_dataset.csv \
+    --v2-dataset data/curated/v2/handcrafted_dataset.csv \
+    --outdir data/evaluation/comparison
 ```
+*Génère : `dataset_comparison_distributions.png` et `dataset_comparison_stats.json`.*
+
+#### B. Comparaison Métrologique et Trajectorielle ISO 18646-2
+Superpose directement les trajectoires des deux approches, trace les barres comparatives des métriques ISO et génère un tableau de bord HTML autonome :
+```bash
+python3 -m src.comparison.compare_benchmarks \
+    --v1-dir data/evaluation/v1/batch_run \
+    --v2-dir data/evaluation/v2/batch_run \
+    --name1 "V1 (19 cols)" \
+    --name2 "V2 (5 cols)" \
+    --outdir data/evaluation/comparison
+```
+*Génère dans `data/evaluation/comparison/` :*
+- **`comparison_trajectories.png` & `.svg`** : Superposition visuelle 2D des trajectoires.
+- **`comparison_iso_metrics.png` & `.svg`** : Graphiques en barres comparatifs ($A_p, A_o, R_p, S_l$) avec les seuils ISO normatifs.
+- **`comparison_summary.csv`** : Tableau récapitulatif tabulaire des métriques.
+- **`comparison_dashboard.html`** : Dashboard interactif complet visualisable dans tout navigateur web.
+
+---
+
+## ➕ Comment Ajouter une Nouvelle Approche (ex: V3)
+
+Pour ajouter une nouvelle méthode (ex: Offline RL, Diffusion Policy, DAgger) :
+1. Créez votre dossier dans `src/approaches/v3_nom_approche/` avec vos scripts `generate_dataset.py` et `train_offline.py`.
+2. Configurez vos chemins de sortie vers `data/curated/v3/`, `models/v3/` et `data/evaluation/v3/`.
+3. Comparez-la directement avec la V1 et la V2 en appelant `src.comparison.compare_benchmarks --v1-dir ... --v2-dir ...`.
 
 ---
 
