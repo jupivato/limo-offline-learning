@@ -1,120 +1,122 @@
-# LIMO Offline Learning : Apprentissage Hors Ligne et Clonage Comportemental pour Robot Mobile AgileX LIMO
+# LIMO Offline Learning : Apprentissage Supervisé Hors Ligne et Contrôle Neuromorphique
 
 [![ROS 2](https://img.shields.io/badge/ROS_2-Humble%20%7C%20Foxy-blue.svg)](https://docs.ros.org/)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.x-EE4C2C.svg)](https://pytorch.org/)
 [![Norme ISO](https://img.shields.io/badge/Norme-ISO%2018646--2-green.svg)](https://www.iso.org/standard/66847.html)
 [![Affiliation](https://img.shields.io/badge/Recherche-CERV%20%2F%20ENIB-purple.svg)](https://www.enib.fr/)
 
-Ce projet implémente une loi de commande neuronale en boucle fermée pour la stabilisation et le positionnement du robot mobile **AgileX LIMO** sous **ROS 2**. L'approche repose sur l'**apprentissage supervisé par démonstration (*Learning from Demonstration - LfD*) / clonage comportemental (*Behavioral Cloning*)** à partir d'un jeu de données préparé manuellement (*handcrafted dataset*), avec une qualification métrologique conforme à la norme internationale **ISO 18646-2**.
+Ce dépôt contient le framework de commande neuronale en boucle fermée pour la navigation et l'accostage du robot mobile **AgileX LIMO** sous **ROS 2**. Développé dans le cadre des activités de recherche au **Centre Européen de Réalité Virtuelle (CERV)** et à l'**École Nationale d'Ingénieurs de Brest (ENIB)**, ce projet implémente l'apprentissage supervisé par démonstration (*Learning from Demonstration - LfD*) / clonage comportemental (*Behavioral Cloning*) avec un protocole de qualification métrologique basé sur la norme internationale **ISO 18646-2**.
 
 ---
 
-## 📌 Présentation Générale
+## 🔀 Organisation des Branches du Dépôt
 
-Dans les travaux précédents, l'entraînement du réseau de neurones était effectué en ligne par rétropropagation d'un gradient de coût calculé en temps réel (*online gradient descent*). Bien que fonctionnelle, cette approche présentait des risques mécaniques et d'instabilité en boucle ouverte dès que le taux d'apprentissage variait.
+Le projet est structuré en **branches d'expérimentation indépendantes**. Chaque branche implémente un **type de test spécifique** reposant sur un **format de jeu de données (*dataset*) distinct**, avec sa propre logique de génération et d'apprentissage :
 
-Ce projet propose une alternative robuste et sécurisée :
-1. **Découplage Temporel et Sécurité** : L'apprentissage s'effectue entièrement **hors ligne** (*offline*). Aucun gradient n'est rétropropagé pendant le déplacement physique du robot, éliminant tout risque d'oscillations violentes ou de saturation moteur.
-2. **Jeu de Données Artisanal Équilibré** : La base d'apprentissage est construite à partir de démonstrations manuelles ou canoniques couvrant les **9 manœuvres élémentaires de l'ENIB**, sur l'ensemble des 4 quadrants et pour des orientations variées.
-3. **Compatibilité 1-pour-1 avec la Base Existante** : Conservation stricte de l'architecture du réseau `PioneerNN` (perceptron multicouche 3-1000-2 avec activation `Tanh`), des facteurs de normalisation $\boldsymbol{\alpha}$ et du format de sérialisation des poids en fichier JSON (`input_weights`, `output_weights`).
-4. **Qualification Métrologique ISO 18646-2** : Évaluation rigoureuse de la précision de pose ($A_p, A_o$) et de la répétabilité de pose ($R_p, R_o$) en boucle fermée avec des poids gelés.
+```mermaid
+graph TD
+    Main["main (Vue Générale & Fondements)"]
+    V1["dataset-v1 (Test Itération 1)\n• Séries temporelles continues (19 colonnes à 20 Hz)\n• 9 manœuvres canoniques ENIB\n• Biais synaptiques activés (use_bias=True)"]
+    V2["dataset-v2 (Test Itération 2)\n• Mapping relatif spatial (5 colonnes)\n• Trajectoires analytiques Dubins + Hermite\n• Réseau strictly sans biais (use_bias=False)\n• Recalage odométrique SO(2)"]
+
+    Main -.->|Exploration| V1
+    Main -.->|Production recommandée| V2
+```
 
 ---
 
-## 📐 Fondements Théoriques et Modélisation
+### 📋 Présentation des Branches et Types de Datasets
 
-### Modèle Cinématique et Variables d'Entrée
+#### 1. Branche `main` *(Cette Branche)*
+- **Rôle** : Référentiel central, présentation globale de l'architecture logicielle, formalisation mathématique et guide de navigation.
+- **Utilisation** :
+  ```bash
+  git checkout main
+  ```
 
-Le châssis différentiel du LIMO est repéré par sa pose `(x, y, θ)` et commandé par le vecteur de vitesses `(v_lin, v_ang)`.  
-Les 3 entrées normalisées transmises au réseau de neurones sont :
+#### 2. Branche `dataset-v1` *(Test Itération 1 — Séries Temporelles 19 Colonnes)*
+- **Type de Dataset** : Séries temporelles complètes enregistrées à 20 Hz selon un schéma à **19 colonnes** (`timestamp`, $x, y, \theta$, $t_x, t_y, t_\theta$, $e_x, e_y, e_\theta$, $in_0, in_1, in_2$, $v_{\text{lin}}, v_{\text{ang}}$, vitesses de roues, identifiant de manœuvre, quadrant).
+- **Type de Test** : Évaluation du clonage comportemental sur les **9 manœuvres canoniques de l'ENIB** avec cibles arbitraires et réseau avec biais synaptiques (`use_bias=True`).
+- **Utilisation** :
+  ```bash
+  git checkout dataset-v1
+  ```
+  Consultez le [README de la branche dataset-v1](https://github.com/jupivato/limo-offline-learning/tree/dataset-v1).
 
-- **`in_0`** = `(x - x_cible) × α_x`
-- **`in_1`** = `(y - y_cible) × α_y`
-- **`in_2`** = `(recast(θ - θ_cible) - θ_s(x, y)) × α_θ`
+#### 3. Branche `dataset-v2` *(Test Itération 2 — Mapping Relatif 5 Colonnes)*
+- **Type de Dataset** : Schéma compact et direct à **5 colonnes relatives** (`x_r, y_r, theta_r, v_r, w_r`) systématiquement centrées sur la cible relative $(0, 0, 0)$.
+- **Type de Test** : Trajectoires analytiques hybrides (**courbes de Dubins** pour l'avance et **splines d'Hermite** pour le recul), **funil terminal d'alignement angulaire pour $\theta \to 0$**, perceptron strictly sans biais (**`use_bias=False`**) garantissant mathématiquement l'arrêt absolu à l'origine, et correction odométrique par **matrice de rotation $SO(2)$**.
+- **Utilisation** :
+  ```bash
+  git checkout dataset-v2
+  ```
+  Consultez le [README de la branche dataset-v2](https://github.com/jupivato/limo-offline-learning/tree/dataset-v2).
+
+---
+
+## 📊 Matrice Méthodologique des Versions de Dataset
+
+| Dimension | Branche `dataset-v1` | Branche `dataset-v2` |
+| :--- | :--- | :--- |
+| **Format du Dataset** | 19 colonnes temporelles | **5 colonnes relatives** |
+| **Repère spatial** | Coordonnées globales + cibles arbitraires | **Repère relatif centré cible $(0, 0, 0)$** |
+| **Génération des trajectoires** | Intégration cinématique continue à 20 Hz | **Analytique : Dubins ($x \le 0$) + Hermite ($x \ge 0$)** |
+| **Alignement terminal** | Non contraint | **Funil haute densité orienté $\theta \to 0$** |
+| **Architecture Réseau** | `PioneerNN` avec biais (`use_bias=True`) | **`PioneerNN` sans biais (`use_bias=False`)** |
+| **Garantie d'équilibre** | Dépend de la convergence des poids | **Mathématique : $\text{MLP}(\vec{0}) = \vec{0}$** |
+| **Recalage Odométrique** | Décalage cartésien simple | **Matrice de rotation 2D $SO(2)$** |
+
+---
+
+## 📐 Modélisation Commune et Contrôleur Neuromorphique
+
+### 1. Variables d'Entrée Normalisées
+Le châssis différentiel du LIMO est guidé par 3 variables normalisées transmises au réseau de neurones :
+- **`in_0`** = $(x - x_{\text{cible}}) \times \alpha_x$
+- **`in_1`** = $(y - y_{\text{cible}}) \times \alpha_y$
+- **`in_2`** = $(\text{recast}(\theta - \theta_{\text{cible}}) - \theta_s(x, y)) \times \alpha_\theta$
 
 Avec :
-- Facteurs d'échelle : **`α = [1/3, 1/3, 1/π]`**
-- Orientation stratégique (évite les minima locaux) : **`θ_s(x, y) = tanh(10·x) · arctan(1·y)`**
+- Facteurs d'échelle : $\boldsymbol{\alpha} = [1/3, 1/3, 1/\pi]$
+- Orientation stratégique (évitement des minima locaux) : $\theta_s(x, y) = \tanh(10\cdot x) \cdot \arctan(1\cdot y)$
 
-### Fonction de Perte Hors Ligne (MSE)
-
-L'entraînement optimise les poids synaptiques en minimisant l'erreur quadratique moyenne entre les vitesses prédites et les vitesses de démonstration :
-
-```text
-Loss = (1 / N) · Σ [ (v_lin_pred - v_lin_demo)² + β · (v_ang_pred - v_ang_demo)² ]
-```
-
-Où :
-- **`v_lin_pred`**, **`v_ang_pred`** : vitesses linéaire et angulaire prédites par le réseau.
-- **`v_lin_demo`**, **`v_ang_demo`** : vitesses de consigne issues de la démonstration experte.
-- **`β`** : coefficient de pondération angulaire (par défaut `β = 1.0`).
-- **`N`** : nombre d'échantillons du lot (*batch*).
+### 2. Architecture PioneerNN
+- Perceptron multicouche (MLP) à 3 entrées, 1 couche cachée de 1 000 neurones et 2 sorties $(v_{\text{lin}}, v_{\text{ang}})$.
+- Activation : $\tanh$ (tangente hyperbolique).
+- Sérialisation : Fichier JSON standard (`input_weights`, `output_weights`) totalisant 5 000 poids synaptiques.
 
 ---
 
-## 📂 Architecture du Dépôt
+## 🚀 Démarrage Rapide
 
-```text
-limo-offline-learning/
-├── .agents/                    # Compétences et runbooks Antigravity
-│   └── skills/
-│       ├── limo-ros2-env/
-│       ├── limo-dataset-curator/
-│       ├── pioneer-offline-trainer/
-│       └── iso-18646-evaluator/
-├── config/                     # Paramètres d'apprentissage et configurations cibles
-├── data/
-│   ├── raw/                    # Données brutes de téléopération (.csv)
-│   ├── curated/                # Jeux de données nettoyés et équilibrés
-│   └── augmented/              # Données augmentées par symétrie bilatérale
-├── docs/                       # Planification détaillée et documentation technique
-├── models/                     # Poids du réseau exportés au format JSON
-├── src/
-│   ├── core/                   # PioneerNN (PyTorch) et sérialiseur JSON
-│   ├── ros2/                   # Interface ROS 2 (/odom et /cmd_vel à 20 Hz)
-│   ├── teleop/                 # Nœud de téléopération et enregistrement (20 Hz)
-│   ├── training/               # Entraînement hors ligne (MSE Loss + AdamW)
-│   └── evaluation/             # Exécution autonome en boucle fermée
-├── calculus/                   # Calcul des métriques ISO 18646-2
-├── requirements.txt            # Dépendances Python
-└── README.md
-```
-
----
-
-## 🚀 Guide d'Utilisation
-
-### 1. Installation des Dépendances
+### 1. Cloner le Dépôt
 ```bash
+git clone https://github.com/jupivato/limo-offline-learning.git
+cd limo-offline-learning
+```
+
+### 2. Basculer sur la Branche Souhaitée
+
+#### Pour le pipeline V2 (recommandé) :
+```bash
+git checkout dataset-v2
 pip install -r requirements.txt
+python3 -m src.data.generate_rule_based_dataset --output data/curated/handcrafted_dataset.csv --stride 2
+python3 -m src.training.train_offline --dataset data/curated/handcrafted_dataset.csv --no-bias
 ```
 
-### 2. Collecte des Démonstrations Manuelles
-Téléopérer le robot vers une cible avec une fréquence rigoureuse de 20 Hz :
+#### Pour le pipeline V1 (expérimentation 19 colonnes) :
 ```bash
-python3 -m src.teleop.collect_demonstrations --target 0.0 0.0 0.0
+git checkout dataset-v1
+pip install -r requirements.txt
+python3 -m src.data.generate_rule_based_dataset --output data/curated/handcrafted_dataset.csv
+python3 -m src.training.train_offline --dataset data/curated/handcrafted_dataset.csv
 ```
 
-### 3. Traitement et Augmentation des Données
-Nettoyer les trajectoires et appliquer la symétrie sagittale ($y \to -y$, $v_{\text{ang}} \to -v_{\text{ang}}$) :
-```bash
-python3 -m src.data.curate_dataset --input-dir data/raw/ --output data/curated/handcrafted_dataset.csv
-```
+---
 
-### 4. Entraînement Hors Ligne
-Entraîner le perceptron `PioneerNN` et exporter les poids au format JSON standard :
-```bash
-python3 -m src.training.train_offline --dataset data/curated/handcrafted_dataset.csv --epochs 100
-```
+## 👥 Projet et Affiliation
 
-### 5. Évaluation Autonome en Boucle Fermée
-Exécuter la politique apprise avec poids gelés sous Gazebo ou sur robot réel :
-```bash
-python3 -m src.evaluation.run_autonomous --weights models/supervised_w_torch_diff.json --target 0.0 0.0 0.0
-```
-
-### 6. Benchmark Métrologique ISO 18646-2
-Calculer la précision et la répétabilité de pose à partir des fichiers de télémétrie :
-```bash
-python3 calculus/calculate_iso_metrics.py
-```
+- **Cadre** : Projet Pluridisciplinaire en Équipe (PPE)
+- **Laboratoire** : Centre Européen de Réalité Virtuelle (CERV) / École Nationale d'Ingénieurs de Brest (ENIB)
+- **Robot** : AgileX Robotics LIMO (Plateforme mobile sous ROS 2)
