@@ -20,6 +20,7 @@ import sys
 import csv
 import json
 import time
+import math
 import argparse
 from typing import Tuple, Dict, Any, List
 
@@ -37,6 +38,9 @@ except ImportError:
 
 from src.core.pioneer_nn import PioneerNN
 
+# Facteurs d'échelle ENIB standardisés
+ALPHA = [1.0 / 3.0, 1.0 / 3.0, 1.0 / math.pi]
+
 
 class DemonstrationDataset(Dataset):
     """
@@ -46,6 +50,8 @@ class DemonstrationDataset(Dataset):
     """
 
     def __init__(self, csv_file_path: str):
+        if not TORCH_AVAILABLE:
+            raise RuntimeError("PyTorch n'est pas installé dans cet environnement.")
         if not os.path.exists(csv_file_path):
             raise FileNotFoundError(f"Jeu de données introuvable : {csv_file_path}")
 
@@ -66,7 +72,8 @@ class DemonstrationDataset(Dataset):
 
                         # Facteurs d'échelle ENIB standardisés
                         ths = math.tanh(10.0 * xr) * math.atan(1.0 * yr)
-                        e_th = math.atan2(math.sin(thr - ths), math.cos(thr - ths))
+                        thr_norm = math.atan2(math.sin(thr), math.cos(thr))
+                        e_th = thr_norm - ths
                         in_0 = xr * ALPHA[0]
                         in_1 = yr * ALPHA[1]
                         in_2 = e_th * ALPHA[2]
