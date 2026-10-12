@@ -201,6 +201,58 @@ python3 -m src.comparison.compare_benchmarks \
 
 ---
 
+## ⚙️ Guide d'Expérimentation et Réglage des Hyperparamètres
+
+Le framework est conçu pour permettre l'exploration rapide et la comparaison métrologique de différentes configurations architecturales et cinématiques.
+
+### 1. Paramètres d'Entraînement en Ligne de Commande (CLI)
+
+Chaque script d'entraînement (`train_offline.py`) expose directement les hyperparamètres sans nécessiter de modification du code source :
+
+| Paramètre CLI | Description | Valeur par défaut | Exemple d'utilisation |
+| :--- | :--- | :---: | :--- |
+| `--hidden-size` | Nombre de neurones dans la couche cachée de PioneerNN | `1000` | `--hidden-size 256` (réseau compact) ou `2000` |
+| `--lr` | Taux d'apprentissage de l'optimiseur AdamW | `0.001` | `--lr 0.0005` (optimisation conservatrice) |
+| `--beta` | Pondération de la perte angulaire ($\mathcal{L} = \text{MSE}_v + \beta \cdot \text{MSE}_\omega$) | `1.0` | `--beta 2.0` (priorisation du cap $\theta \to 0$) |
+| `--epochs` | Nombre maximal d'époques d'apprentissage | `100` | `--epochs 150` |
+| `--batch-size` | Taille des lots échantillonnés avec mélange aléatoire | `128` | `--batch-size 256` |
+| `--patience` | Seuil d'époques sans amélioration pour arrêt précoce | `15` | `--patience 20` |
+| `--no-bias` / `--use-bias` | Activation ou suppression stricte des biais neuronaux | `--no-bias` (V2) | `--use-bias` (pour tester la dérive résiduelle) |
+
+#### Exemples de commandes d'expérimentation :
+```bash
+# Entraînement d'un modèle compact pour microprocesseur embarqué (256 neurones) :
+python3 -m src.approaches.v2_relative.train_offline --hidden-size 256 --output models/v2/model_compact.json
+
+# Entraînement avec forte priorisation de l'alignement angulaire (bêta = 2.0) :
+python3 -m src.approaches.v2_relative.train_offline --beta 2.0 --lr 0.0005
+```
+
+---
+
+### 2. Paramètres de Normalisation ($\boldsymbol{\alpha}$) et Loi d'Orientation
+
+Les entrées du réseau sont dimensionnées par les constantes de normalisation définies dans les modules d'entraînement (`ALPHA`) :
+
+$$\mathbf{in} = \begin{bmatrix} (x - x_d) \cdot \alpha_x \\ (y - y_d) \cdot \alpha_y \\ (\text{recast}(\theta - \theta_d) - \theta_s(x,y)) \cdot \alpha_\theta \end{bmatrix}, \quad \boldsymbol{\alpha} = \begin{bmatrix} 1/3 \\ 1/3 \\ 1/\pi \end{bmatrix}$$
+
+- **Facteurs $\alpha_x = 1/3$ et $\alpha_y = 1/3$** : Dimensionnés pour un rayon d'évolution nominal de 3 mètres (erreur cartésienne projetée dans $[-1, 1]$). Pour tester une arène de 5 mètres, adapter à $\boldsymbol{\alpha} = [1/5, 1/5, 1/\pi]$.
+- **Facteur $\alpha_\theta = 1/\pi$** : Normalise l'erreur d'orientation périodique $[-\pi, \pi]$ dans $[-1, 1]$.
+- **Loi d'orientation stratégique $\theta_s(x, y) = \tanh(10x) \cdot \arctan(1y)$** : Évite les singularités et minima locaux lorsque le robot tourne le dos à la cible. Les coefficients $10.0$ et $1.0$ règlent la courbure du champ d'attraction.
+
+---
+
+### 3. Paramètres de Génération Cinématique (Oracles Dubins & Hermite)
+
+Dans `src/approaches/v2_relative/generate_dataset.py`, la résolution spatiale et les contraintes dynamiques peuvent être adaptées :
+- **`--stride`** : Facteur de sous-échantillonnage temporel des trajectoires.
+  - `--stride 2` : Cartographie haute densité (recommandé pour la production).
+  - `--stride 5` : Échantillonnage plus rapide pour prototypage léger.
+- **`R_MIN = 0.42 m`** : Rayon de courbure minimal admissible par le châssis différentiel du LIMO (empattement et adhérence des roues).
+- **`V_CRUISE = 0.24 m/s`** : Vitesse linéaire nominale de consigne.
+
+---
+
 ## ➕ Comment Ajouter une Nouvelle Approche (ex: V3)
 
 Pour ajouter une nouvelle méthode (ex: Offline RL, Diffusion Policy, DAgger) :

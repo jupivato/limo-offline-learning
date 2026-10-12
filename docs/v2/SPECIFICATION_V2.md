@@ -51,3 +51,20 @@ python3 -m src.evaluation.run_batch_benchmark \
     --weights models/v2/supervised_w_torch_diff.json \
     --outdir data/evaluation/v2/batch_run
 ```
+
+---
+
+## 4. Hyperparamètres et Réglages Expérimentaux
+
+Le pipeline V2 supporte des variations d'architecture et de cinématique :
+- **Architecture PioneerNN** :
+  - Neurones cachés : `--hidden-size 1000` (par défaut, testable à 256, 512, 2000).
+  - Biais : `--no-bias` (recommandé pour $\text{MLP}(\vec{0}) = \vec{0}$) ou `--use-bias`.
+- **Optimisation** :
+  - Taux d'apprentissage : `--lr 0.001` (AdamW).
+  - Poids angulaire : `--beta 1.0` (augmenter à 2.0 pour prioriser le cap terminal).
+  - Épocas et batch : `--epochs 100 --batch-size 128`.
+- **Normalisation et Cinématique** :
+  - Facteurs d'échelle : $\boldsymbol{\alpha} = [1/3, 1/3, 1/\pi]$ dans `train_offline.py`.
+  - Résolution spatiale : `--stride 2` ou `--stride 5` dans `generate_dataset.py`.
+
