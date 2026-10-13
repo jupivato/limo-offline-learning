@@ -89,18 +89,17 @@ Cette planche décompose l'impact de chaque taux d'apprentissage sur les critèr
 ![Trajectoires 2D en boucle fermée et vecteurs d'orientation](images/lr_trajectories_comparison.png)
 
 #### Explication détaillée de la Figure 3 :
-Ce graphique illustre le comportement cinématique réel du robot en boucle fermée sur le scénario représentatif **Run_1_Q1** (départ du quadrant 1 à $(2.0\text{ m}, 2.0\text{ m})$ avec cap initial $\theta_0 = 0.0^\circ$) :
-1. **Conditions Initiales et Cible** :
-   - **Point noir $(2.0, 2.0)$ avec flèche noire** : Indique la pose de départ et l'orientation initiale du robot ($\theta = 0^\circ$).
+Cette planche en deux volets distincts décompose la cinématique à la fois à l'échelle globale de l'arène et à l'échelle fine de l'accostage :
+1. **Panneau (A) — Vue Globale de l'Arène & Trajectoires 2D Complètes** :
+   - **Point noir $(2.0, 2.0)$ avec flèche noire** : Indique la pose de départ et l'orientation initiale imposée du robot ($\theta_0 = 0.0^\circ$).
    - **Étoile dorée $(0, 0)$ avec flèche verte** : Représente la station d'amarrage cible et le cap désiré à l'arrivée ($\theta^* = 0.0^\circ$).
-   - **Cercle orange pointillé ($R = 0.20\text{ m}$)** : Périmètre d'entrée en phase d'approche fine et de décélération.
-   - **Cercle vert tireté ($R = 0.05\text{ m}$)** : Seuil d'arrêt terminal où le contrôleur coupe les vitesses motrices.
-2. **Vecteurs de Cap d'Arrivée (Flèches d'orientation finale)** :
-   - **Modèle $\eta = 0.001$ (courbe et flèche bleues)** : Le robot suit une courbure progressive, ralentit parfaitement à l'approche de la zone de freinage et immobilise sa base avec un cap final aligné à **$5.67^\circ$** par rapport à l'axe cible (flèche bleue quasi-parallèle à la flèche cible verte).
-   - **Modèle $\eta = 0.05$ (courbe et flèche rouges)** : Le robot fonce en ligne droite vers l'origine mais néglige la correction angulaire terminale. Comme le montre la flèche rouge inclinée de travers, le robot s'arrête avec un angle résiduel de **$35.16^\circ$**.
-3. **Encadré Agrandisseur (*Inset Zoom*)** :
-   - La loupe en bas à gauche zoome sur la zone $[-0.25, 0.45]\text{ m} \times [-0.35, 0.25]\text{ m}$ autour du point de docking.
-   - Ce zoom met visuellement en évidence le défaut rédhibitoire de $\eta = 0.05$ : dans un contexte industriel réel (accostage sur une borne de recharge par contact ou amarrage d'outillage), un défaut de cap de $35^\circ$ provoquerait un choc mécanique ou un échec de connexion.
+   - **Parcours comparatifs** : Montre la progression continue des 4 modèles depuis le quadrant 1 vers l'origine, sans croisement chaotique ni recouvrement textuel, avec une légende dégagée dans la zone libre supérieure.
+2. **Panneau (B) — Zoom d'Accostage & Démonstration Métrologique des Caps** :
+   - **Cadre haute résolution** centré sur la zone critique $[-0.28, 0.45]\text{ m} \times [-0.35, 0.30]\text{ m}$ autour de la cible.
+   - **Cercle orange pointillé ($R = 0.20\text{ m}$)** : Périmètre d'entrée en décélération et préparation au docking.
+   - **Cercle vert tireté ($R = 0.05\text{ m}$)** : Seuil d'arrêt terminal ISO où les vitesses motrices sont coupées.
+   - **Vecteur de Cap Optimal ($\eta = 0.001$, flèche bleue)** : La flèche bleue pointe quasiment dans l'axe de la cible ($A_o = 5.7^\circ < 15.0^\circ$), validant une trajectoire d'amarrage conforme et stable.
+   - **Vecteur de Cap Défaillant ($\eta = 0.05$, flèche rouge)** : La flèche rouge pointe de travers avec une déviation marquée de $+35.2^\circ$, franchissant largement le seuil d'exclusion ISO. Dans une application industrielle réelle (accostage sur des contacts de recharge par induction ou insertion mécanique), cette erreur de $35^\circ$ provoquerait une collision latérale ou un refus de prise de charge.
 
 ---
 

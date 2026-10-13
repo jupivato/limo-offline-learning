@@ -144,18 +144,22 @@ class DataLogger:
         ax.plot(x[-1], y[-1], "s", color="#e74c3c", markersize=7, label="arrivée")
         ax.plot(0, 0, "r*", markersize=14, label="cible (0,0)")
 
+        # Flèches d'orientation dynamique adaptées à l'échelle de l'arène
+        span_x = max(max(x) - min(x), 1.0)
+        span_y = max(max(y) - min(y), 1.0)
+        arr_len = max(0.25, max(span_x, span_y) * 0.08)
+
         # Flèche d'orientation initiale (cap départ)
-        arr_len = 0.20
         ax.annotate("", xy=(x[0] + arr_len * math.cos(th[0]), y[0] + arr_len * math.sin(th[0])), xytext=(x[0], y[0]),
-                    arrowprops=dict(arrowstyle="-|>", color="#27ae60", lw=2.5, mutation_scale=16))
+                    arrowprops=dict(arrowstyle="-|>", color="#27ae60", lw=2.8, mutation_scale=18))
 
         # Flèche d'orientation finale (cap arrivée)
         ax.annotate("", xy=(x[-1] + arr_len * math.cos(th[-1]), y[-1] + arr_len * math.sin(th[-1])), xytext=(x[-1], y[-1]),
-                    arrowprops=dict(arrowstyle="-|>", color="#e74c3c", lw=2.5, mutation_scale=16))
+                    arrowprops=dict(arrowstyle="-|>", color="#e74c3c", lw=2.8, mutation_scale=18))
 
         # Flèche d'orientation désirée à la cible (theta=0)
-        ax.annotate("", xy=(0.20, 0.0), xytext=(0.0, 0.0),
-                    arrowprops=dict(arrowstyle="-|>", color="#f39c12", lw=2.0, mutation_scale=14))
+        ax.annotate("", xy=(arr_len, 0.0), xytext=(0.0, 0.0),
+                    arrowprops=dict(arrowstyle="-|>", color="#f39c12", lw=2.2, mutation_scale=16))
 
         ax.set_title("Trajectoire XY & Caps (Départ/Arrivée)")
         ax.set_xlabel("x (m)")
