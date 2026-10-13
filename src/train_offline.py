@@ -154,7 +154,7 @@ if TORCH_AVAILABLE:
         def __len__(self) -> int:
             return len(self.X)
 
-        def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
+        def __getitem__(self, idx: int) -> Tuple[Any, Any]:
             return self.X[idx], self.y[idx]
 
     class WeightedMSELoss(nn.Module):
@@ -386,7 +386,7 @@ def train_offline_numpy(
             W1 -= lr * (m_hat1 / (np.sqrt(v_hat1) + eps) + wd * W1)
 
             # AdamW update W2
-            mW2 = beta1 * mW2 + (1.0 - beta2) * dW2
+            mW2 = beta1 * mW2 + (1.0 - beta1) * dW2
             vW2 = beta2 * vW2 + (1.0 - beta2) * (dW2 ** 2)
             m_hat2 = mW2 / (1.0 - beta1 ** t)
             v_hat2 = vW2 / (1.0 - beta2 ** t)

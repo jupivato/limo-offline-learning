@@ -94,6 +94,8 @@ def compute_iso_18646_metrics(trials: List[Dict[str, float]], xc: float = 0.0, y
     # Statistiques complémentaires
     pos_errors = [math.hypot(x - xc, y - yc) for x, y in zip(xs, ys)]
     mean_err_pos = sum(pos_errors) / n
+    abs_zs_deg = [math.degrees(abs(z)) for z in zs]
+    mean_abs_angle_err_deg = sum(abs_zs_deg) / n
 
     return {
         "n": n,
@@ -102,6 +104,7 @@ def compute_iso_18646_metrics(trials: List[Dict[str, float]], xc: float = 0.0, y
         "Ap": Ap,
         "Ao_deg": Ao_deg,
         "Ao_abs_deg": Ao_abs_deg,
+        "mean_abs_angle_err_deg": mean_abs_angle_err_deg,
         "l_bar": l_bar,
         "Sl": Sl,
         "Rp": Rp,

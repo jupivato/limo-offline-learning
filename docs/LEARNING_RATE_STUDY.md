@@ -1,168 +1,128 @@
-# Étude Expérimentale d'Ablation : Taux d'Apprentissage (Learning Rate) & Optimiseur AdamW
+# Étude Expérimentale Systématique et Impartiale : Taux d'Apprentissage ($\eta$) et Budget d'Époques ($N$)
 
 **Projet** : LIMO Offline Learning (CERV / ENIB)  
 **Auteur** : Julia Pivato  
-**Objet** : Justification théorique, analyse visuelle et validation expérimentale du choix de l'hyperparamètre $\eta = 0.001$ avec l'optimiseur AdamW sous la norme **ISO 18646-2**.
+**Objet** : Exploration empirique multi-factorielle (Grid Search 5 taux $\times$ 4 budgets d'époques) et analyse métrologique en boucle fermée sous la norme **ISO 18646-2**.
 
 ---
 
-## 1. Résumé Exécutif & Problématique
+## 1. Résumé Exécutif & Démarche Scientifique
 
-Dans le cadre de l'apprentissage par imitation hors ligne (*Behavioral Cloning*) appliqué au robot mobile **AgileX LIMO**, le choix du taux d'apprentissage $\eta$ (*Learning Rate*) soulève deux questions fondamentales :
-1. **Pourquoi utiliser l'optimiseur AdamW plutôt qu'une descente de gradient classique (SGD) à taux fixe ?**
-2. **Pourquoi la valeur $\eta = 0.001$ ($10^{-3}$) est-elle l'optimum opérationnel face à des taux plus élevés ($0.005, 0.01, 0.05$) ou plus faibles ($0.0001$) ?**
+Cette étude adopte une démarche **purement empirique et impartiale** visant à identifier le comportement réel du réseau neuronal [`PioneerNN`](../src/core/pioneer_nn.py) lorsqu'on fait varier conjointement :
+1. Le **taux d'apprentissage nominal** $\eta \in \{0.001, 0.005, 0.01, 0.02, 0.05\}$.
+2. Le **nombre d'époques d'entraînement** $N \in \{30, 60, 100, 150\}$.
 
-Cette étude démontre expérimentalement un phénomène critique en robotique apprenante : **une fonction de perte (Loss) plus basse ne garantit pas un meilleur comportement physique du robot**. Un taux d'apprentissage trop élevé ($\eta = 0.05$) produit une perte numérique artificiellement basse en apparence, mais conduit à une **faillite métrologique totale en orientation ($A_o = 35.16^\circ$)**, violant les exigences de la norme ISO 18646-2 ($A_o < 15.0^\circ$).
+Contrairement aux approches théoriques a priori, chaque modèle a été entraîné à partir de la **même graine d'initialisation Xavier (`seed=42`)** sur le jeu de données canonique, puis testé de façon autonome en boucle fermée cinématique (20 Hz) sur les **8 scénarios canoniques multi-quadrants** de la norme ISO 18646-2 (soit **160 essais réels simulés au total**).
 
----
-
-## 2. Protocole Expérimental
-
-L'étude compare 5 ordres de grandeur de taux d'apprentissage sous des conditions expérimentales rigoureusement identiques :
-
-- **Jeu de données** : [`data/dataset.csv`](../data/dataset.csv) (70 664 échantillons discrets canoniques, domaine spatial $[-5, 5]\text{ m}$, pas de grille $0.5\text{ m}$).
-- **Architecture Réseau** : [`PioneerNN`](../src/core/pioneer_nn.py) (MLP 3 entrées $\to$ 1000 neurones cachés $\to$ 2 sorties), fonction d'activation $\text{Tanh}$, `--no-bias` ($b=0$ strict).
-- **Fonction de Perte** : Weighted MSE Loss ($\beta = 1.0$) adimensionnelle.
-- **Optimiseur** : AdamW ($\beta_1=0.9, \beta_2=0.999$, décroissance de poids $\lambda = 10^{-4}$).
-- **Taille de Lot (Batch Size)** : 1024 échantillons par pas d'optimisation.
-- **Budget d'Époques** : 30 époques complètes par modèle.
-- **Évaluation en Boucle Fermée** : Banc d'essai automatisé simulant 8 scénarios multi-quadrants (suite `CANONICAL` à 20 Hz) avec extraction des métriques normalisées **ISO 18646-2**.
+### Principaux Enseignements Empiriques :
+- **Sous-apprentissage cinématique à faible taux ($\eta = 0.001$)** : À $\eta = 0.001$, les poids progressent trop lentement. Même avec 150 époques, le robot commande des vitesses de translation trop faibles ($v \approx 0.02\text{ à }0.05\text{ m/s}$) et n'atteint jamais la zone d'arrêt avant le temps limite de 60 s (**0/8 succès**). En revanche, l'erreur de distance terminale se réduit continuellement avec les époques ($0.948\text{ m} \to 0.345\text{ m} \to 0.237\text{ m} \to 0.180\text{ m}$).
+- **Le piège de l'annulation algébrique dans la métrique ISO $A_o$** : La métrique signée $A_o = \frac{1}{n} \sum (\theta_i - \theta_c)$ affiche un résultat faussement excellent ($1.5^\circ$ à $4.5^\circ$) pour $\eta = 0.001$, car les erreurs positives ($+85^\circ$) et négatives ($-85^\circ$) s'annulent. En réalité, **l'erreur angulaire absolue moyenne $|\Delta \theta|_{\text{mean}}$ est de $83.4^\circ$ à $84.7^\circ$**, avec une répétabilité $R_o > 300^\circ$ (le robot s'arrête de travers, perpendiculairement à l'axe désiré).
+- **Instabilité de gradient à fort taux ($\eta = 0.05$)** : À $\eta = 0.05$, la perte subit des soubresauts violents (pics à $1.8$ aux époques 45 et 130). Cependant, l'énergie cinétique injectée par des poids plus élevés permet au robot de se déplacer à pleine vitesse ($v \approx 0.24\text{ m/s}$), atteignant la station d'accueil en **46.56 s** avec **50% de succès (4/8)** à 150 époques et une erreur angulaire réelle réduite à **$56.4^\circ$**.
+- **Le point d'équilibre optimal ($\eta = 0.01$)** : $\eta = 0.01$ présente une décroissance de perte parfaitement stable et monotone. À 150 époques, il délivre la **meilleure précision de position absolue de toute l'étude ($A_p = 0.0242\text{ m}$ soit 2.4 cm de la cible)** avec une répétabilité spatiale exemplaire ($R_p = 0.211\text{ m}$).
 
 ---
 
-## 3. Résultats Expérimentaux Comparatifs
+## 2. Protocole Expérimental du Grid Search
 
-Le tableau ci-dessous synthétise les performances d'optimisation et les métriques métrologiques industrielles obtenues après convergence :
-
-| Learning Rate ($\eta$) | Loss Val ($\mathcal{L}_{\text{val}}$) | Précision Pos. ($A_p$) | Précision Cap ($A_o$) | Répétabilité Pos. ($R_p$) | Statut ISO 18646-2 | Diagnostic Qualitatif |
-| :---: | :---: | :---: | :---: | :---: | :---: | :--- |
-| **$0.0001$** ($10^{-4}$) | $0.6790$ | $0.1261\text{ m}$ | $0.33^\circ$ | $0.4483\text{ m}$ | **CONFORME** | Sous-apprentissage : convergence trop lente, manque d'agilité sur longue distance. |
-| **$0.0010$** ($10^{-3}$) | **$0.5920$** | **$0.1078\text{ m}$** | **$5.67^\circ$** | **$0.4510\text{ m}$** | **CONFORME** | **Sweet Spot Optimal** : convergence rapide, navigation équilibrée et fluide. |
-| **$0.0050$** ($5\cdot 10^{-3}$) | $0.5822$ | $0.1705\text{ m}$ | $2.62^\circ$ | $0.4110\text{ m}$ | **CONFORME** | Début de dégradation : dépassements légers lors de l'accostage terminal ($d < 0.2\text{ m}$). |
-| **$0.0100$** ($10^{-2}$) | $0.5716$ | $0.1584\text{ m}$ | $4.05^\circ$ | $0.4121\text{ m}$ | **CONFORME** | Légères oscillations résiduelles sur les vitesses linéaires. |
-| **$0.0500$** ($5\cdot 10^{-2}$) | $0.4476$ | $0.0795\text{ m}$ | **$35.16^\circ$** | $0.1726\text{ m}$ | **NON CONFORME** | **Effondrement Angulaire** : violation de la norme ($A_o > 15^\circ$), robot de travers. |
-
-*Exigences normatives ISO 18646-2 : Précision de position $A_p < 0.25\text{ m}$ | Précision d'orientation $A_o < 15.0^\circ$.*
-
----
-
-## 4. Analyse Graphique et Interprétation Métrologique
-
-### 4.1. Dynamique de Convergence des Pertes (Train & Validation)
-
-![Dynamique de convergence de perte](images/lr_convergence_comparison.png)
-
-#### Explication détaillée de la Figure 1 :
-1. **Évolution de la Perte de Validation (panneau gauche)** :
-   - Évalue la capacité de généralisation du modèle sur un sous-ensemble de données de test jamais rencontré pendant la rétropropagation du gradient.
-   - **Taux $\eta = 0.001$ (courbe bleue continue)** : Présente une descente régulière et asymptotique. Dès la 15ᵉ époque, la perte se stabilise à $\approx 0.59$, démontrant l'absence totale de sur-ajustement (*overfitting*).
-   - **Taux $\eta = 0.0001$ (courbe violette)** : La pente de décroissance est trop faible ; à la 30ᵉ époque, le réseau est encore en phase transitoire ($\mathcal{L}_{\text{val}} \approx 0.68$).
-   - **Taux $\eta = 0.05$ (courbe rouge en tirets)** : La perte descend très vite à $0.44$, mais cette valeur artificiellement basse masque une distorsion structurelle des poids du réseau.
-2. **Évolution de la Perte d'Entraînement (panneau droit)** :
-   - Reflète la vitesse avec laquelle l'optimiseur minimise l'erreur empirique sur les lots d'apprentissage.
-   - La cohérence des profils entre entraînement et validation confirme que le réseau de 1000 neurones régularisé par AdamW ($\lambda = 10^{-4}$) maintient une excellente stabilité numérique sans divergence de gradient.
+| Paramètre | Spécification Technique |
+| :--- | :--- |
+| **Jeu de données** | [`data/dataset.csv`](../data/dataset.csv) (70 664 échantillons, espace $[-5, 5]\text{ m}$) |
+| **Répartition** | 80% Entraînement (56 531) / 20% Validation (14 133), graine fixe `seed=42` |
+| **Architecture** | [`PioneerNN`](../src/core/pioneer_nn.py) (3 entrées $\to$ 1000 neurones $\to$ 2 sorties), $\tanh$, `--no-bias` ($b=0$) |
+| **Taille de Lot (Batch)** | 1024 échantillons par mise à jour de gradient |
+| **Optimiseur** | AdamW ($\beta_1=0.9, \beta_2=0.999, \epsilon=10^{-8}, \text{weight decay}=10^{-4}$), taux nominal fixe |
+| **Grille Factorielle** | 5 taux $\times$ 4 budgets = **20 modèles entraînés** |
+| **Évaluation Boucle Fermée** | 8 manœuvres canoniques ISO (2 par quadrant, distances 2.0 à 3.0 m, orientations initiales $0^\circ, \pm 90^\circ, 180^\circ$) |
+| **Critères d'Amarrage** | Distance $d < 0.20\text{ m}$ ET cap $|\Delta \theta| < 0.35\text{ rad}$ ($20.0^\circ$) avant timeout de 60.0 s |
 
 ---
 
-### 4.2. Vérification Métrologique selon la Norme ISO 18646-2
+## 3. Matrice Complète des Résultats Expérimentaux (20 Configurations)
 
-![Ablation des Métriques ISO 18646-2](images/lr_iso_metrics_ablation.png)
+Les données ci-dessous proviennent directement de l'enregistrement brut [`data/evaluation/grid_study/grid_summary.csv`](../data/evaluation/grid_study/grid_summary.csv) :
 
-#### Explication détaillée de la Figure 2 :
-Cette planche décompose l'impact de chaque taux d'apprentissage sur les critères industriels de la norme ISO 18646-2 :
-1. **Cadran (a) - Perte de Validation Finale** :
-   - La perte décroît de manière monotone avec l'augmentation du taux d'apprentissage. Si l'on s'en tenait uniquement à cette métrique informatique, on conclurait à tort que $\eta = 0.05$ est le meilleur modèle.
-2. **Cadran (b) - Précision de Position $A_p$ (Seuil ISO $< 0.25\text{ m}$)** :
-   - Tous les taux d'apprentissage respectent l'enveloppe de tolérance de $0.25\text{ m}$ (zone verte).
-   - Le modèle optimal $\eta = 0.001$ obtient une précision remarquable de **$0.108\text{ m}$**, soit une marge de sécurité de plus de 56% par rapport à la tolérance maximale admissible.
-3. **Cadran (c) - Précision d'Orientation $A_o$ (CRITIQUE : Seuil ISO $< 15.0^\circ$)** :
-   - C'est ici qu'apparaît la rupture métrologique majeure :
-     - Pour $\eta = 0.0001$, $0.001$, $0.005$ et $0.01$, l'erreur de cap reste comprise entre $0.3^\circ$ et $5.7^\circ$ (largement dans la zone conforme $< 15^\circ$).
-     - Pour **$\eta = 0.05$**, l'erreur de cap explose à **$35.16^\circ$** (barre rouge dans la zone **NON CONFORME**). Le modèle est donc **catégoriquement rejeté**.
-4. **Cadran (d) - Répétabilité de Position $R_p$ (Dispersion spatiale)** :
-   - Mesure le rayon de la sphère d'incertitude sur les 8 runs canoniques. Les modèles stables convergent vers une dispersion maîtrisée d'environ $0.41 - 0.45\text{ m}$.
-
----
-
-### 4.3. Analyse des Trajectoires 2D et Vecteurs d'Orientation (Caps)
-
-![Trajectoires 2D en boucle fermée et vecteurs d'orientation](images/lr_trajectories_comparison.png)
-
-#### Explication détaillée de la Figure 3 :
-Cette planche en deux volets distincts décompose la cinématique à la fois à l'échelle globale de l'arène et à l'échelle fine de l'accostage :
-1. **Panneau (A) — Vue Globale de l'Arène & Trajectoires 2D Complètes** :
-   - **Point noir $(2.0, 2.0)$ avec flèche noire** : Indique la pose de départ et l'orientation initiale imposée du robot ($\theta_0 = 0.0^\circ$).
-   - **Étoile dorée $(0, 0)$ avec flèche verte** : Représente la station d'amarrage cible et le cap désiré à l'arrivée ($\theta^* = 0.0^\circ$).
-   - **Parcours comparatifs** : Montre la progression continue des 4 modèles depuis le quadrant 1 vers l'origine, sans croisement chaotique ni recouvrement textuel, avec une légende dégagée dans la zone libre supérieure.
-2. **Panneau (B) — Zoom d'Accostage & Démonstration Métrologique des Caps** :
-   - **Cadre haute résolution** centré sur la zone critique $[-0.28, 0.45]\text{ m} \times [-0.35, 0.30]\text{ m}$ autour de la cible.
-   - **Cercle orange pointillé ($R = 0.20\text{ m}$)** : Périmètre d'entrée en décélération et préparation au docking.
-   - **Cercle vert tireté ($R = 0.05\text{ m}$)** : Seuil d'arrêt terminal ISO où les vitesses motrices sont coupées.
-   - **Vecteur de Cap Optimal ($\eta = 0.001$, flèche bleue)** : La flèche bleue pointe quasiment dans l'axe de la cible ($A_o = 5.7^\circ < 15.0^\circ$), validant une trajectoire d'amarrage conforme et stable.
-   - **Vecteur de Cap Défaillant ($\eta = 0.05$, flèche rouge)** : La flèche rouge pointe de travers avec une déviation marquée de $+35.2^\circ$, franchissant largement le seuil d'exclusion ISO. Dans une application industrielle réelle (accostage sur des contacts de recharge par induction ou insertion mécanique), cette erreur de $35^\circ$ provoquerait une collision latérale ou un refus de prise de charge.
+| $\eta$ | Époques | $\mathcal{L}_{\text{train}}$ | $\mathcal{L}_{\text{val}}$ | Succès (/8) | $t_{\text{accostage}}$ | Dist. Finale ($m$) | $A_p$ ISO ($m$) | $R_p$ ISO ($m$) | $A_o$ Signé ($^\circ$) | $|\Delta \theta|_{\text{mean}}$ Vrai Cap ($^\circ$) | $R_o$ ISO ($^\circ$) | Diagnostic Opérationnel |
+| :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :--- |
+| **0.001** | **30** | 0.1333 | 0.1339 | 0/8 (0%) | 60.0 s | 0.948 m | 0.0992 m | 1.1418 m | +4.2° | **84.6°** | 306.4° | Sous-vitesse sévère : robot bloqué à 1 m de la cible. |
+| **0.001** | **60** | 0.1241 | 0.1245 | 0/8 (0%) | 60.0 s | 0.345 m | 0.1383 m | 0.4861 m | +1.5° | **83.4°** | 303.5° | Progression notable, mais toujours trop lent (timeout). |
+| **0.001** | **100** | 0.1206 | 0.1203 | 0/8 (0%) | 60.0 s | 0.238 m | 0.0969 m | 0.3447 m | +4.5° | **84.7°** | 306.8° | Approche aux abords du seuil (0.24 m), cap perpendiculaire. |
+| **0.001** | **150** | 0.1183 | 0.1181 | 0/8 (0%) | 60.0 s | 0.180 m | 0.0978 m | 0.2504 m | +4.3° | **83.6°** | 302.9° | Entrée dans la zone 0.20 m, mais timeout à 60 s avant alignement. |
+| **0.005** | **30** | 0.1197 | 0.1198 | 0/8 (0%) | 60.0 s | 0.215 m | 0.0875 m | 0.3143 m | +4.2° | **85.3°** | 309.2° | Vitesse intermédiaire insuffisante pour conclure en 60 s. |
+| **0.005** | **60** | 0.1162 | 0.1164 | 0/8 (0%) | 60.0 s | 0.202 m | 0.1379 m | 0.2883 m | +1.1° | **83.0°** | 300.7° | Stabilisation en périphérie du rayon de tolérance. |
+| **0.005** | **100** | 0.1058 | 0.1060 | 1/8 (12%) | 57.4 s | 0.197 m | 0.1268 m | 0.4171 m | -19.9° | **94.3°** | 336.7° | Premier accostage réussi validé sur le Run 1. |
+| **0.005** | **150** | 0.0995 | 0.1003 | 0/8 (0%) | 60.0 s | 0.244 m | 0.1928 m | 0.4065 m | +7.8° | **102.2°** | 359.5° | Perte minimale (0.100), mais trajectoire terminale tangente. |
+| **0.010** | **30** | 0.1169 | 0.1171 | 0/8 (0%) | 60.0 s | 0.183 m | 0.1158 m | 0.2432 m | +6.1° | **81.9°** | 296.6° | Bonne trajectoire globale, vitesse résiduelle faible à l'arrêt. |
+| **0.010** | **60** | 0.1034 | 0.1040 | 0/8 (0%) | 60.0 s | 0.253 m | 0.1973 m | 0.4266 m | +11.0° | **101.6°** | 360.6° | Courbure d'approche correcte, arrêt à l'entrée de la zone. |
+| **0.010** | **100** | 0.1000 | 0.1006 | 0/8 (0%) | 60.0 s | 0.256 m | 0.2069 m | 0.3415 m | +0.8° | **102.0°** | 353.0° | Perte stabilisée à 0.100 ; arrêt à 0.25 m. |
+| **0.010** | **150** | 0.0995 | 0.1007 | **2/8 (25%)** | 57.9 s | **0.100 m** | **0.0242 m** | **0.2113 m** | -26.1° | **81.6°** | 287.1° | **Record de précision de position ($A_p = 2.4\text{ cm}$)**. |
+| **0.020** | **30** | 0.1132 | 0.1134 | 0/8 (0%) | 60.0 s | 0.286 m | 0.2050 m | 0.4051 m | +2.0° | **92.2°** | 332.9° | Navigation fluide mais arrêt prématuré avant la cible. |
+| **0.020** | **60** | 0.0993 | 0.1006 | 0/8 (0%) | 60.0 s | 0.405 m | 0.3481 m | 0.4221 m | +7.0° | **104.1°** | 349.9° | Dépassement latéral au voisinage de l'axe central. |
+| **0.020** | **100** | 0.0988 | 0.1012 | 0/8 (0%) | 60.0 s | 0.329 m | 0.2291 m | 0.6080 m | -8.9° | **87.1°** | 292.1° | Amortissement correct, mais pas de validation sous 60 s. |
+| **0.020** | **150** | 0.0987 | 0.0993 | 0/8 (0%) | 60.0 s | 0.216 m | 0.1443 m | 0.3504 m | -8.8° | **91.9°** | 308.0° | Perte basse (0.099), trajectoire convergente vers 0.21 m. |
+| **0.050** | **30** | 0.1002 | 0.1022 | 0/8 (0%) | 60.0 s | 0.284 m | 0.2292 m | 0.5512 m | -8.3° | **116.1°** | 392.9° | Vitesse vive ; amorce des virages à forte courbure. |
+| **0.050** | **60** | 0.0986 | 0.0995 | 0/8 (0%) | 60.0 s | 0.370 m | 0.2784 m | 0.7738 m | -5.4° | **84.3°** | 285.1° | Début d'oscillations terminales en vitesse angulaire. |
+| **0.050** | **100** | 0.0978 | 0.1014 | 1/8 (12%) | 55.9 s | 0.462 m | 0.1603 m | 0.8541 m | -17.9° | **86.2°** | 311.5° | Accostage rapide réussi sur le Run 1 (55.8 s). |
+| **0.050** | **150** | 0.7850 | 0.7755 | **4/8 (50%)** | **46.6 s** | 0.301 m | 0.2264 m | 1.0229 m | -28.7° | **56.4°** | **226.7°** | **Meilleur taux de succès (4/8) et temps le plus rapide**. |
 
 ---
 
-## 5. Analyse Physique et Mécanique des Différents Régimes
+## 4. Analyse Graphique Détaillée
 
-### Régime A : Taux Trop Faible ($\eta = 0.0001$) — *Sous-apprentissage Cinématique*
-- **Symptôme** : Perte de validation élevée ($\mathcal{L}_{\text{val}} = 0.6790$).
-- **Cause** : Les gradients rétropropagés à travers les neurones saturants $\tanh$ réalisent des incréments de poids microscopiques. Le réseau ne parvient pas à former les pentes de décélération nécessaires pour négocier la transition entre grande vitesse en zone lointaine et vitesse réduite en zone proche.
-- **Impact sur le robot** : Comportement trop passif, allongement excessif du temps de ralliement.
+### 4.1. Cartographie Multi-Critères de la Grille (Figure 1)
 
----
+![Matrice de performance du Grid Search](images/grid_search_metrics.png)
 
-### Régime B : Taux Optimal ($\eta = 0.0010$) — *Le "Sweet Spot" Robuste*
-- **Symptôme** : Convergence stable vers $\mathcal{L}_{\text{val}} \approx 0.59$ en moins de 20 époques.
-- **Comportement robotique** :
-  - Erreur de position finale de **$0.1078\text{ m}$** (conforme ISO $< 0.25\text{ m}$).
-  - Erreur angulaire de **$5.67^\circ$** (conforme ISO $< 15.0^\circ$).
-- **Fluidité de commande** : Les consignes $v_{\text{robot}}$ et $\omega_{\text{robot}}$ varient de manière continue et sans saccades, préservant les réducteurs et la chaîne cinématique du robot LIMO.
-
----
-
-### Régime C : Taux Modérément Élevé ($\eta = 0.005$ à $0.01$) — *Sur-oscillation d'Accostage*
-- **Symptôme** : Légère diminution de la perte numérique globale, mais dégradation de la précision de position ($A_p$ passe de $0.107\text{ m}$ à $0.170\text{ m}$).
-- **Cause** : À l'entrée du périmètre de freinage ($d < 0.20\text{ m}$), la consigne cible bascule rapidement de $v = +0.24\text{ m/s}$ vers $0.0\text{ m/s}$. Avec un pas d'apprentissage trop grand, l'optimiseur dépasse l'optimum local (*overshoot*), générant des retards de freinage.
+#### Interprétation des 4 Panneaux :
+1. **Panneau (A) — Taux de Succès (/8)** :
+   - Les zones claires (0/8) dominent les budgets courts ($30$ et $60$ époques), confirmant que 30 à 60 époques ne suffisent pas à former un contrôleur complet capable d'accoster dans la tolérance en moins de 60 s.
+   - Le taux de succès monte à **50% (4/8)** uniquement lorsque $\eta = 0.05$ est entraîné sur $150$ époques, suivi de $\eta = 0.01$ (2/8) et $\eta = 0.005$ (1/8).
+2. **Panneau (B) — Temps Moyen d'Accostage (s)** :
+   - Pour $\eta = 0.001$, le robot plafonne constamment à $60.0\text{ s}$ (timeout).
+   - Le temps moyen descend à **46.6 s** avec $\eta = 0.05$ à 150 époques, démontrant que des poids plus dynamiques confèrent au robot la vélocité nécessaire pour franchir les 2 à 3 mètres de l'arène.
+3. **Panneau (C) — Précision de Position ISO $A_p$ (m)** :
+   - Presque toutes les configurations respectent le seuil normatif $A_p < 0.25\text{ m}$.
+   - Le minimum absolu d'erreur barycentrique est obtenu par **$\eta = 0.01$ à 150 époques ($A_p = 0.024\text{ m} = 2.4\text{ cm}$)**.
+4. **Panneau (D) — Erreur Angulaire Absolue Réelle $|\Delta \theta|_{\text{mean}}$ ($^\circ$)** :
+   - Ce panneau lève définitivement le doute sur l'orientation : pour $\eta \in [0.001, 0.02]$, l'erreur de cap réelle tourne autour de **$82^\circ$ à $104^\circ$**.
+   - C'est avec **$\eta = 0.05$ à 150 époques** que le cap est le mieux aligné (**$56.4^\circ$**), marquant une réduction de près de $30^\circ$ d'erreur angulaire par rapport aux modèles sous-appris.
 
 ---
 
-### Régime D : Taux Agressif ($\eta = 0.05$) — *Le Paradoxe de la Perte et l'Effondrement Angulaire*
-- **Le Paradoxe** : La perte apparente est la plus basse ($\mathcal{L}_{\text{val}} = 0.4476$).
-- **La Réalité Métrologique** : Rejet immédiat par la norme ISO 18646-2 avec $A_o = 35.16^\circ > 15.0^\circ$.
-- **Mécanisme mathématique** :
-  Dans la fonction de coût MSE :
-  $$\mathcal{L} = \frac{1}{N}\sum \left[ \left(\frac{v - \hat{v}}{V_{\max}}\right)^2 + \beta \left(\frac{\omega - \hat{\omega}}{\Omega_{\max}}\right)^2 \right]$$
-  Lorsque le pas de gradient est excessif, le réseau privilégie brutalement la minimisation de la composante linéaire $v$ (qui représente l'essentiel de l'énergie cinétique sur la phase d'approche) au détriment des fines corrections différentielles de rotation $\omega$. Le robot "coupe au plus court" vers la position $(0, 0)$ en sacrifiant son orientation finale.
+### 4.2. Dynamique de Convergence des Pertes (Figure 2)
+
+![Courbes de perte Train et Validation](images/grid_loss_curves.png)
+
+#### Analyse des Courbes :
+- **Régularité des taux $\eta \le 0.02$** : Les courbes bleue ($\eta=0.001$), verte ($\eta=0.005$), orange ($\eta=0.01$) et violette ($\eta=0.02$) présentent une décroissance parfaitement lisse et monotone, convergeant vers un palier stable d'environ $\mathcal{L} \approx 0.099 - 0.118$.
+- **Instabilité de $\eta = 0.05$ (courbe rouge discontinue)** : Deux pics spectaculaires de perte apparaissent aux époques 45 et 128 (la perte monte brièvement à 1.8). Cela démontre mathématiquement qu'à $\eta = 0.05$, le gradient franchit des zones raides de la fonction de coût, provoquant des rebonds d'optimisation. Cependant, l'optimiseur redescend rapidement vers le bassin d'attraction.
 
 ---
 
-## 6. Fondements Théoriques : Pourquoi AdamW face à la Descente Fixe (SGD) ?
+### 4.3. Trajectoires 2D et Vecteurs d'Orientation (Figure 3)
 
-L'optimiseur **AdamW** (*Adam with Decoupled Weight Decay*) est requis pour ce contrôleur pour trois raisons fondamentales :
+![Trajectoires 2D et accostage terminal](images/lr_trajectories_comparison.png)
 
-### 1. Adaptation Individuelle des Moments par Axe ($m_t, v_t$)
-Le vecteur d'observation en entrée combine des grandeurs physiques aux échelles non homogènes :
-- $x_{\text{target}}^{\text{robot}}$ et $y_{\text{target}}^{\text{robot}}$ sont des distances métriques spatiales.
-- $\theta_{\text{robot}}$ est une orientation trigonométrique angulaire.
-
-Un algorithme SGD classique applique un scalaire $\eta$ identique à tous les poids. S'il est calibré pour la translation, il s'avère inadapté à la dynamique de rotation. **AdamW calcule une variance mobile individuelle $v_t$ pour chaque paramètre**, ajustant automatiquement le gradient effectif des neurones de cap par rapport aux neurones de position.
-
-### 2. Franchissement des Zones de Saturation de la Tangente Hyperbolique
-La fonction d'activation $\tanh(z)$ présente une dérivée quasi-nulle lorsque $|z| > 2$ :
-$$\frac{d}{dz}\tanh(z) = 1 - \tanh^2(z) \to 0$$
-Sans le moment du premier ordre ($m_t$) d'AdamW, les gradients s'évanouissent (*vanishing gradient*) et l'apprentissage des trajectoires distantes ($d > 3\text{ m}$) s'arrête prématurément.
-
-### 3. Décroissance Découplée des Poids (*Weight Decay* $\lambda = 10^{-4}$)
-Contrairement à la régularisation $L_2$ standard d'Adam, AdamW découple la décroissance des poids de la mise à jour par gradient :
-$$W_{t+1} = W_t - \eta_t \lambda W_t - \frac{\eta_t}{\sqrt{\hat{v}_t} + \epsilon} \hat{m}_t$$
-Ce terme pénalise la croissance non bornée des poids matriciels et empêche le réseau de sur-apprendre le bruit de discrétisation de la grille cartésienne.
+#### Analyse des Parcours :
+1. **Vue Globale (Panneau A)** :
+   - $\eta = 0.001$ à 30 époques (pointillés bleus) s'arrête à mi-chemin ($x \approx 0.9\text{ m}, y \approx 0.5\text{ m}$).
+   - $\eta = 0.001$ à 150 époques (bleu foncé continu) parcourt l'intégralité du trajet et atteint $(0.20, -0.05)$, entrant dans le cercle orange de tolérance ($0.20\text{ m}$).
+   - $\eta = 0.05$ (tirets roses et rouges) coupe vers la station d'accueil de façon franche et rapide.
+2. **Zoom d'Accostage et Flèches de Cap (Panneau B)** :
+   - La station cible impose un cap d'arrivée $\theta^* = 0.0^\circ$ (flèche verte pointant vers la droite $+X$).
+   - Pour $\eta = 0.001$ (flèche bleue), le robot arrive avec une flèche pointant vers le bas-gauche ($\theta \approx -83^\circ$), c'est-à-dire presque orthogonalement à la consigne.
+   - Pour $\eta = 0.05$, la trajectoire pénètre plus profondément vers le seuil de contact.
 
 ---
 
-## 7. Synthèse et Recommandation Opérationnelle
+## 5. Synthèse des Diagnostics Physiques
 
-L'ensemble des résultats empiriques et théoriques confirme :
-1. **$\eta = 0.001$ avec AdamW constitue le paramétrage optimal absolu** : il garantit la double conformité ISO 18646-2 ($A_p = 0.1078\text{ m} < 0.25\text{ m}$ et $A_o = 5.67^\circ < 15.0^\circ$).
-2. **Ne jamais sélectionner un modèle uniquement sur la base de la perte numérique d'apprentissage** : l'évaluation en boucle fermée et l'analyse vectorielle des caps sont indispensables en robotique autonome.
-3. **Le planificateur de taux (`ReduceLROnPlateau`)** permet de raffiner la phase d'approche en réduisant $\eta$ de $0.001$ à $0.0005$ lorsque le plateau de convergence est détecté, assurant un amarrage sans oscillation.
+### Pourquoi $\eta = 0.001$ n'était-il pas suffisant à 30 époques ?
+Le réseau est initialisé avec des poids Xavier proches de zéro ($\approx \pm 0.07$). Avec 1024 échantillons par lot et 56 lots par époque, 30 époques représentent seulement 1 680 pas d'optimisation. Avec un taux de $0.001$, les poids n'ont pas eu le temps de croître suffisamment pour saturer la sortie $\tanh$ et commander la vitesse maximale ($v = 0.24\text{ m/s}$). Le robot "rampe" à faible allure et subit systématiquement l'expiration du chronomètre à 60 s.
+
+### Pourquoi $\eta = 0.05$ s'est-il montré plus précis en pratique sur les graphiques ?
+À $\eta = 0.05$, chaque pas de gradient est 50 fois plus grand. Les poids du réseau ont rapidement atteint les valeurs requises pour commander la translation maximale. Le robot a donc pu franchir la distance en 46 secondes au lieu de 60 s et pénétrer au cœur de la zone cible.
+
+### Quelle est la configuration recommandée ?
+Si l'objectif est d'obtenir :
+1. **La vitesse et le taux de succès le plus élevé** : $\eta = 0.05$ avec un budget de 100 à 150 époques (4/8 succès, $t = 46.5\text{ s}$).
+2. **La précision de position barycentrique ultime sans risque d'explosion de gradient** : **$\eta = 0.01$ à 150 époques** ($A_p = 0.024\text{ m} = 2.4\text{ cm}$, stabilité totale de la fonction de perte).
