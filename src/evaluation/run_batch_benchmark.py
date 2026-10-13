@@ -22,12 +22,19 @@ import time
 import math
 import csv
 import argparse
-from typing import List, Dict, Any, Optional
+# Inclusion automatique du dossier racine du projet dans sys.path
+_project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+if _project_root not in sys.path:
+    sys.path.insert(0, _project_root)
 
 # Inclusion automatique du chemin dist-packages snap si présent
 for _p in [
     os.path.expanduser("~/local/lib/python3.14/dist-packages"),
-    os.path.expanduser("~/snap/antigravity-cli/common/local/lib/python3.14/dist-packages")
+    os.path.expanduser("~/local/lib/python3.12/dist-packages"),
+    os.path.expanduser("~/snap/antigravity-cli/common/local/lib/python3.14/dist-packages"),
+    os.path.expanduser("~/snap/antigravity-cli/common/local/lib/python3.12/dist-packages"),
+    "/home/juliapivato/snap/antigravity-cli/common/local/lib/python3.14/dist-packages",
+    "/home/juliapivato/snap/antigravity-cli/common/local/lib/python3.12/dist-packages",
 ]:
     if os.path.exists(_p) and _p not in sys.path:
         sys.path.insert(0, _p)
@@ -44,17 +51,16 @@ except (ImportError, RuntimeError):
     ROS2_AVAILABLE = False
     LimoROS2Interface = None
 
-ALPHA = [1.0 / 3.0, 1.0 / 3.0, 1.0 / math.pi]
+X_MAX = 5.0   # m
+Y_MAX = 5.0   # m
+V_MAX = 0.24  # m/s
+W_MAX = 0.50  # rad/s
+ALPHA = [1.0 / X_MAX, 1.0 / Y_MAX, 1.0 / math.pi]
 
 
 def recast_angle(angle_rad: float) -> float:
     """Recalcule un angle dans l'intervalle principal (-pi, +pi]."""
     return math.atan2(math.sin(angle_rad), math.cos(angle_rad))
-
-
-def theta_strategic(x: float, y: float) -> float:
-    """Orientation stratégique ENIB évitant les minima locaux."""
-    return math.tanh(10.0 * x) * math.atan(1.0 * y)
 
 
 # 1. Suite Canonique ISO (8 essais de référence - 2 par quadrant)
@@ -127,19 +133,23 @@ def run_simulated_benchmark_run(
 
     for step in range(max_steps):
         elapsed = step * dt
-        e_x = x - target[0]
-        e_y = y - target[1]
-        dist = math.hypot(e_x, e_y)
+        dx = target[0] - x
+        dy = target[1] - y
+        theta_r = recast_angle(th)
+        dist = math.hypot(dx, dy)
         e_theta = recast_angle(th - target[2])
 
-        th_s = theta_strategic(x, y)
-        in_0 = e_x * ALPHA[0]
-        in_1 = e_y * ALPHA[1]
-        in_2 = (e_theta - th_s) * ALPHA[2]
+        # Coordonnées de la cible dans le repère local du robot
+        x_target_robot = dx * math.cos(theta_r) + dy * math.sin(theta_r)
+        y_target_robot = -dx * math.sin(theta_r) + dy * math.cos(theta_r)
+        theta_robot_abs = theta_r
 
-        cost = (ALPHA[0] ** 2 * e_x ** 2 +
-                ALPHA[1] ** 2 * e_y ** 2 +
-                ALPHA[2] ** 2 * (e_theta - th_s) ** 2)
+        # Normalisation des entrées
+        in_0 = max(-1.0, min(1.0, x_target_robot / X_MAX))
+        in_1 = max(-1.0, min(1.0, y_target_robot / Y_MAX))
+        in_2 = max(-1.0, min(1.0, theta_robot_abs / math.pi))
+
+        cost = in_0 ** 2 + in_1 ** 2 + in_2 ** 2
 
         # Condition de convergence
         if step > 10 and dist < dist_tol and abs(e_theta) < 0.35:
@@ -154,8 +164,8 @@ def run_simulated_benchmark_run(
         else:
             cmd = list(cmd_raw)
 
-        v_cmd = max(-0.16, min(0.26, float(cmd[0])))
-        w_cmd = max(-0.45, min(0.45, float(cmd[1])))
+        v_cmd = max(-V_MAX, min(V_MAX, float(cmd[0]) * V_MAX))
+        w_cmd = max(-W_MAX, min(W_MAX, float(cmd[1]) * W_MAX))
 
         logger.log(position=[x, y, th], target=target, command=[v_cmd, w_cmd], grad=[0.0, 0.0], cost=cost)
 
@@ -220,19 +230,23 @@ def run_gazebo_benchmark_run(
             break
 
         pos = robot.get_position()
-        e_x = pos[0] - target[0]
-        e_y = pos[1] - target[1]
-        dist = math.hypot(e_x, e_y)
+        dx = target[0] - pos[0]
+        dy = target[1] - pos[1]
+        theta_r = recast_angle(pos[2])
+        dist = math.hypot(dx, dy)
         e_theta = recast_angle(pos[2] - target[2])
 
-        th_s = theta_strategic(pos[0], pos[1])
-        in_0 = e_x * ALPHA[0]
-        in_1 = e_y * ALPHA[1]
-        in_2 = (e_theta - th_s) * ALPHA[2]
+        # Coordonnées de la cible dans le repère local du robot
+        x_target_robot = dx * math.cos(theta_r) + dy * math.sin(theta_r)
+        y_target_robot = -dx * math.sin(theta_r) + dy * math.cos(theta_r)
+        theta_robot_abs = theta_r
 
-        cost = (ALPHA[0] ** 2 * e_x ** 2 +
-                ALPHA[1] ** 2 * e_y ** 2 +
-                ALPHA[2] ** 2 * (e_theta - th_s) ** 2)
+        # Normalisation des entrées
+        in_0 = max(-1.0, min(1.0, x_target_robot / X_MAX))
+        in_1 = max(-1.0, min(1.0, y_target_robot / Y_MAX))
+        in_2 = max(-1.0, min(1.0, theta_robot_abs / math.pi))
+
+        cost = in_0 ** 2 + in_1 ** 2 + in_2 ** 2
 
         if elapsed > 0.5 and dist < dist_tol and abs(e_theta) < 0.35:
             print(f"    [Succès] Atteint en {elapsed:.1f}s ! (Erreur dist={dist:.3f}m, angle={abs(e_theta):.3f}rad [{math.degrees(abs(e_theta)):.1f}°])")
@@ -245,8 +259,8 @@ def run_gazebo_benchmark_run(
         else:
             cmd = list(cmd_raw)
 
-        v_cmd = max(-0.16, min(0.26, float(cmd[0])))
-        w_cmd = max(-0.45, min(0.45, float(cmd[1])))
+        v_cmd = max(-V_MAX, min(V_MAX, float(cmd[0]) * V_MAX))
+        w_cmd = max(-W_MAX, min(W_MAX, float(cmd[1]) * W_MAX))
         robot.set_cmd_vel(v_cmd, w_cmd)
         logger.log(position=pos, target=target, command=[v_cmd, w_cmd], grad=[0.0, 0.0], cost=cost)
 

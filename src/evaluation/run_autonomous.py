@@ -22,6 +22,11 @@ import math
 import argparse
 from typing import List, Optional, Dict, Any, Tuple
 
+# Inclusion automatique du dossier racine du projet dans sys.path
+_project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+if _project_root not in sys.path:
+    sys.path.insert(0, _project_root)
+
 try:
     import torch
     TORCH_AVAILABLE = True
@@ -38,18 +43,17 @@ from src.core.pioneer_nn import PioneerNN
 from src.ros2.limo_interface import LimoROS2Interface
 from src.evaluation.data_logger import DataLogger
 
-# Facteurs d'échelle et orientation stratégique
-ALPHA = [1.0 / 3.0, 1.0 / 3.0, 1.0 / math.pi]
+# Facteurs de normalisation robot-centriques et bornes cinématiques
+X_MAX = 5.0   # m
+Y_MAX = 5.0   # m
+V_MAX = 0.24  # m/s
+W_MAX = 0.50  # rad/s
+ALPHA = [1.0 / X_MAX, 1.0 / Y_MAX, 1.0 / math.pi]
 
 
 def recast_angle(angle_rad: float) -> float:
     """Recaste l'angle dans (-pi, pi]."""
     return math.atan2(math.sin(angle_rad), math.cos(angle_rad))
-
-
-def theta_strategic(x: float, y: float) -> float:
-    """Orientation stratégique ENIB : theta_s = tanh(10 * x) * atan(1 * y)."""
-    return math.tanh(10.0 * x) * math.atan(1.0 * y)
 
 
 def run_autonomous_session(
@@ -126,20 +130,24 @@ def run_autonomous_session(
                 break
 
             pos = robot.get_position()
-            e_x = pos[0] - target[0]
-            e_y = pos[1] - target[1]
-            dist = math.hypot(e_x, e_y)
+            dx = target[0] - pos[0]
+            dy = target[1] - pos[1]
+            theta_r = recast_angle(pos[2])
+            dist = math.hypot(dx, dy)
             e_theta = recast_angle(pos[2] - target[2])
 
-            th_s = theta_strategic(pos[0], pos[1])
-            in_0 = e_x * ALPHA[0]
-            in_1 = e_y * ALPHA[1]
-            in_2 = (e_theta - th_s) * ALPHA[2]
+            # Coordonnées de la cible dans le repère local du robot
+            x_target_robot = dx * math.cos(theta_r) + dy * math.sin(theta_r)
+            y_target_robot = -dx * math.sin(theta_r) + dy * math.cos(theta_r)
+            theta_robot_abs = theta_r
 
-            # Valeur instantanée du coût quadratique
-            cost = (ALPHA[0] ** 2 * e_x ** 2 +
-                    ALPHA[1] ** 2 * e_y ** 2 +
-                    ALPHA[2] ** 2 * (e_theta - th_s) ** 2)
+            # Normalisation dans [-1.0, 1.0]
+            in_0 = max(-1.0, min(1.0, x_target_robot / X_MAX))
+            in_1 = max(-1.0, min(1.0, y_target_robot / Y_MAX))
+            in_2 = max(-1.0, min(1.0, theta_robot_abs / math.pi))
+
+            # Valeur instantanée du coût quadratique normalisé
+            cost = in_0 ** 2 + in_1 ** 2 + in_2 ** 2
 
             # Critère de convergence et d'accostage : d < dist_tol et orientation alignée (|e_theta| < 0.35 rad ~ 20 deg)
             # (Ne s'applique qu'après au moins 0.5s de navigation pour éviter le faux arrêt immédiat)
@@ -153,9 +161,9 @@ def run_autonomous_session(
             with torch.no_grad():
                 cmd = model(input_tensor).squeeze().tolist()
 
-            # Cinématique automobile en courbes amples et marche arrière si nécessaire
-            v_cmd = max(-0.16, min(0.26, float(cmd[0])))
-            w_cmd = max(-0.45, min(0.45, float(cmd[1])))
+            # Dénormalisation depuis [-1.0, +1.0] vers les vitesses physiques réelles
+            v_cmd = max(-V_MAX, min(V_MAX, float(cmd[0]) * V_MAX))
+            w_cmd = max(-W_MAX, min(W_MAX, float(cmd[1]) * W_MAX))
             robot.set_cmd_vel(v_cmd, w_cmd)
             logger.log(position=pos, target=target, command=[v_cmd, w_cmd], grad=[0.0, 0.0], cost=cost)
 

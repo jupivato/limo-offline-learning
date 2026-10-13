@@ -11,7 +11,7 @@
 
 ## 1. Principes et Hypothèses de l'Approche V2
 
-L'approche V2 élimine les instabilités de la V1 grâce à une refonte géométrique et mathématique :
+L'approche V2 repose sur une modélisation géométrique et mathématique rigoureuse :
 1. **Repère relatif centré sur la cible $(0, 0, 0)$** : Simplifie l'espace d'état en un mapping direct `x_r, y_r, theta_r -> v_r, w_r`.
 2. **Génération analytique hybride** :
    - Avance ($x \le 0$) par **courbes de Dubins** ($R_{\min} = 0.42\text{ m}$).

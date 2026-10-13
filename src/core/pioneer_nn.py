@@ -16,28 +16,41 @@ pour les environnements où PyTorch n'est pas installé.
 Projet : LIMO Offline Learning (CERV / ENIB)
 """
 
+from __future__ import annotations
+
 import json
 import os
 import sys
 import math
 from typing import Dict, Any, Union, List, Optional
 
-# Inclusion automatique du chemin dist-packages snap si présent
-for _p in [
-    os.path.expanduser("~/local/lib/python3.14/dist-packages"),
-    os.path.expanduser("~/snap/antigravity-cli/common/local/lib/python3.14/dist-packages")
-]:
-    if os.path.exists(_p) and _p not in sys.path:
-        sys.path.insert(0, _p)
+# Project root resolution
+_project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+if _project_root not in sys.path:
+    sys.path.insert(0, _project_root)
+
+# Auto-detect and add all local Python site-packages directories (including Python 3.10, 3.12, 3.14)
+_user_home = os.path.expanduser("~")
+_real_user_home = os.environ.get("SNAP_REAL_HOME", "/home/juliapivato")
+
+for _h in [_user_home, _real_user_home, "/home/juliapivato"]:
+    for _ver in ["3.10", "3.11", "3.12", "3.14"]:
+        for _sub in ["site-packages", "dist-packages"]:
+            for _prefix in [".local/lib", "local/lib", "snap/antigravity-cli/common/local/lib"]:
+                _d = os.path.join(_h, _prefix, f"python{_ver}", _sub)
+                if os.path.exists(_d) and _d not in sys.path:
+                    sys.path.insert(0, _d)
 
 try:
     import torch
     import torch.nn as nn
     TORCH_AVAILABLE = True
-except ImportError:
+except Exception:
     TORCH_AVAILABLE = False
     torch = None
-    nn = None
+    class _DummyNN:
+        Module = object
+    nn = _DummyNN()
 
 
 class DummyTensor(list):

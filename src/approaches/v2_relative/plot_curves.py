@@ -18,14 +18,18 @@ import argparse
 from typing import Dict, Any
 
 # Inclusion automatique du dossier racine du projet dans sys.path
-_project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
 # Inclusion automatique du chemin dist-packages snap si présent
 for _p in [
     os.path.expanduser("~/local/lib/python3.14/dist-packages"),
-    os.path.expanduser("~/snap/antigravity-cli/common/local/lib/python3.14/dist-packages")
+    os.path.expanduser("~/local/lib/python3.12/dist-packages"),
+    os.path.expanduser("~/snap/antigravity-cli/common/local/lib/python3.14/dist-packages"),
+    os.path.expanduser("~/snap/antigravity-cli/common/local/lib/python3.12/dist-packages"),
+    "/home/juliapivato/snap/antigravity-cli/common/local/lib/python3.14/dist-packages",
+    "/home/juliapivato/snap/antigravity-cli/common/local/lib/python3.12/dist-packages",
 ]:
     if os.path.exists(_p) and _p not in sys.path:
         sys.path.insert(0, _p)
@@ -40,8 +44,8 @@ except ImportError:
 
 
 def plot_training_history(
-    history_file_path: str = "models/training_history.json",
-    output_dir: str = "data/evaluation"
+    history_file_path: str = "models/v2/training_history.json",
+    output_dir: str = "data/evaluation/v2"
 ) -> Dict[str, str]:
     """
     Trace et sauvegarde les courbes de convergence de l'entraînement hors ligne.
@@ -54,7 +58,22 @@ def plot_training_history(
         Dict[str, str]: Chemins des fichiers générés (PNG, SVG).
     """
     if not os.path.exists(history_file_path):
-        raise FileNotFoundError(f"Fichier d'historique introuvable : {history_file_path}")
+        candidates = [
+            os.path.join(_project_root, history_file_path),
+            os.path.join(_project_root, "models", "training_history.json"),
+            os.path.join(_project_root, "models", "v2", "training_history.json")
+        ]
+        found = False
+        for c in candidates:
+            if os.path.exists(c):
+                history_file_path = c
+                found = True
+                break
+        if not found:
+            raise FileNotFoundError(f"Fichier d'historique introuvable : {history_file_path}")
+
+    if not os.path.isabs(output_dir) and os.getcwd() != _project_root:
+        output_dir = os.path.join(_project_root, output_dir)
 
     with open(history_file_path, "r", encoding="utf-8") as f:
         history = json.load(f)
@@ -62,7 +81,9 @@ def plot_training_history(
     epochs = history.get("epochs", [])
     train_loss = history.get("train_loss", [])
     val_loss = history.get("val_loss", [])
-    lr_history = history.get("lr", [])
+    lr_history = history.get("learning_rate", history.get("lr", []))
+    if not lr_history or len(lr_history) != len(epochs):
+        lr_history = [0.001] * len(epochs)
 
     if not epochs or not train_loss:
         raise ValueError("L'historique d'entraînement ne contient aucune donnée valide.")

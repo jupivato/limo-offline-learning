@@ -1,686 +1,402 @@
 """
-Générateur de Jeu de Données Expert LIMO (Version 2 - Trajectoires Analytiques Lisses & Pures)
-=============================================================================================
-Génère synthétiquement le jeu de données d'apprentissage hors ligne à 20 Hz pour le robot AgileX LIMO,
-garantissant l'arrivée terminale exacte à la pose cible (x=0.0, y=0.0, theta=0.0) avec vitesses nulles (v=0, w=0).
+LIMO Dataset Generator (Robot-Centric Relative Coordinates & Discrete Ternary Actions)
+========================================================================================
+Generates the offline learning dataset for the AgileX LIMO mobile robot under the
+canonical robot-relative reference frame:
 
-Caractéristiques de la Version 2 :
-1. NOUVEAU SCHÉMA SIMPLIFIÉ À 5 COLONNES :
-   - x_r, y_r, theta_r, v_r, w_r
-2. CONVERGENCE STRICTE VERS L'ALIGNEMENT TERMINAL THETA = 0 :
-   - Trajectoires d'avance Dubins (x <= 0) tangentes à theta = 0 à l'accostage.
-   - Manœuvres de baliza arrière continue Hermite (x >= 0) avec insertion fluide et alignement theta = 0.
-   - Amortissement et stabilisation à l'arrêt complet (v=0, w=0) à l'origine.
-   - Échantillons d'alignement angulaire terminal au cais : si d < 0.15m et theta != 0, rotation pure (v=0, w=-k*theta).
-3. COUVERTURE COMPLÈTE DU PLATEAU (5 MÈTRES) ET 4 QUADRANTS :
-   - Macro-grille spatiale jusqu'à 4.5m dans tous les quadrants.
-   - Tubes de perturbation (robustesse contre le covariate shift).
-   - Augmentation par symétrie sagittale bilatérale (y <-> -y, w <-> -w).
+1. Inputs:
+   - x_target_robot : Target X coordinate in the robot's local body frame (m)
+   - y_target_robot : Target Y coordinate in the robot's local body frame (m)
+   - theta_robot    : Absolute robot heading in the global frame (rad) [-pi, +pi]
 
-Projet : LIMO Offline Learning (CERV / ENIB) - Branch dataset-v2
+2. Outputs (Discrete Ternary Actions):
+   - v_robot : Linear velocity command in {-V_MAX, 0.0, +V_MAX} (m/s)
+   - w_robot : Angular velocity command in {-W_MAX, 0.0, +W_MAX} (rad/s)
+
+3. Spatial Domain & Grid:
+   - x_max = 5.0 m, y_max = 5.0 m
+   - Regular grid: -x_max <= x_target <= x_max with step 0.5 m
+   - Regular grid: -y_max <= y_target <= y_max with step 0.5 m
+   - Absolute heading: -pi <= theta_robot <= pi
+   - High-density terminal docking subgrid around (0, 0) for precise braking (d <= 0.20 m)
+   - Closed-loop dynamic rollouts at 20 Hz (dt = 0.05 s)
+
+Project: LIMO Offline Learning (CERV / ENIB)
 """
 
+from __future__ import annotations
+
 import os
+import sys
 import csv
 import math
 import argparse
-from typing import List, Dict, Any, Tuple, Optional
+from typing import List, Dict, Any, Tuple
 
+# Project root path resolution
+_project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+if _project_root not in sys.path:
+    sys.path.insert(0, _project_root)
 
-# Constantes de normalisation et géométrie du LIMO
-ALPHA = [1.0 / 3.0, 1.0 / 3.0, 1.0 / math.pi]
-LIMO_HALF_TRACK = 0.086  # Demi-voie : 86 mm
-DT = 0.050               # 20 Hz (période Ts = 50 ms)
-R_MIN = 0.42             # Rayon de courbure minimal agile (42 cm)
-V_CRUISE = 0.24          # Vitesse linéaire de croisière (m/s)
+# Kinematic constants
+V_MAX = 0.24       # Maximum linear velocity (m/s)
+W_MAX = 0.50       # Maximum angular velocity (rad/s)
+X_MAX = 5.0        # Spatial boundary X (m)
+Y_MAX = 5.0        # Spatial boundary Y (m)
+D_BRAKE = 0.20     # Braking distance threshold (m)
+D_STOP = 0.05      # Terminal dock deadband (m)
+DT = 0.050         # 20 Hz control loop period (s)
 
-COLONNES_V2 = ["x_r", "y_r", "theta_r", "v_r", "w_r"]
+COLUMNS = ["x_target_robot", "y_target_robot", "theta_robot", "v_robot", "w_robot"]
 
 
 def recast_angle(angle_rad: float) -> float:
-    """Recalcule un angle dans l'intervalle principal (-pi, +pi]."""
+    """Normalize angle into the principal interval (-pi, +pi]."""
     return math.atan2(math.sin(angle_rad), math.cos(angle_rad))
 
 
-def theta_strategic(x: float, y: float) -> float:
-    """Orientation stratégique ENIB évitant les minima locaux."""
-    return math.tanh(10.0 * x) * math.atan(1.0 * y)
-
-
-def determine_quadrant(dx: float, dy: float) -> int:
-    """Identifie le quadrant cartésien (1 à 4)."""
-    if dx >= 0 and dy >= 0:
-        return 1
-    elif dx < 0 and dy >= 0:
-        return 2
-    elif dx < 0 and dy < 0:
-        return 3
-    else:
-        return 4
-
-
-def classify_maneuver(v_lin: float, v_ang: float, dist: float) -> int:
-    """Identifie la classe de manœuvre canonique ENIB (1 à 9)."""
-    if dist < 0.040 and abs(v_lin) < 0.025 and abs(v_ang) < 0.040:
-        return 9  # Stop / Accostage
-    if abs(v_lin) < 0.025:
-        if v_ang > 0.040:
-            return 7  # Pivote à gauche
-        elif v_ang < -0.040:
-            return 8  # Pivote à droite
-        else:
-            return 9  # Stop
-    elif v_lin > 0.0:
-        if v_ang > 0.040:
-            return 2  # Avance à gauche
-        elif v_ang < -0.040:
-            return 6  # Avance à droite
-        else:
-            return 1  # Avance
-    else:  # v_lin < 0.0
-        if v_ang > 0.040:
-            return 5  # Recule à gauche
-        elif v_ang < -0.040:
-            return 3  # Recule à droite
-        else:
-            return 4  # Recule
-
-
-# ==============================================================================
-# ÉVALUATION GÉOMÉTRIQUE ANALYTIQUE DE DUBINS (EXACTE ET CONTINUE)
-# ==============================================================================
-
-def dubins_LSL(a: float, b: float, d: float) -> Optional[Tuple[float, float, float, str]]:
-    sa, sb = math.sin(a), math.sin(b)
-    ca, cb = math.cos(a), math.cos(b)
-    p_sq = 2.0 + d * d - (2.0 * (ca * cb + sa * sb - d * (sa - sb)))
-    if p_sq < 0:
-        return None
-    tmp = math.atan2(cb - ca, d + sa - sb)
-    return ((-a + tmp) % (2.0 * math.pi)), math.sqrt(p_sq), ((b - tmp) % (2.0 * math.pi)), "LSL"
-
-
-def dubins_RSR(a: float, b: float, d: float) -> Optional[Tuple[float, float, float, str]]:
-    sa, sb = math.sin(a), math.sin(b)
-    ca, cb = math.cos(a), math.cos(b)
-    p_sq = 2.0 + d * d - (2.0 * (ca * cb + sa * sb - d * (sb - sa)))
-    if p_sq < 0:
-        return None
-    tmp = math.atan2(ca - cb, d - sa + sb)
-    return ((a - tmp) % (2.0 * math.pi)), math.sqrt(p_sq), ((-b + tmp) % (2.0 * math.pi)), "RSR"
-
-
-def dubins_LSR(a: float, b: float, d: float) -> Optional[Tuple[float, float, float, str]]:
-    sa, sb = math.sin(a), math.sin(b)
-    ca, cb = math.cos(a), math.cos(b)
-    p_sq = -2.0 + d * d + (2.0 * (ca * cb + sa * sb + d * (sa + sb)))
-    if p_sq < 0:
-        return None
-    p = math.sqrt(p_sq)
-    tmp = math.atan2(-ca - cb, d + sa + sb) - math.atan2(-2.0, p)
-    return ((-a + tmp) % (2.0 * math.pi)), p, ((-b + tmp) % (2.0 * math.pi)), "LSR"
-
-
-def dubins_RSL(a: float, b: float, d: float) -> Optional[Tuple[float, float, float, str]]:
-    sa, sb = math.sin(a), math.sin(b)
-    ca, cb = math.cos(a), math.cos(b)
-    p_sq = -2.0 + d * d + (2.0 * (ca * cb + sa * sb - d * (sa + sb)))
-    if p_sq < 0:
-        return None
-    p = math.sqrt(p_sq)
-    tmp = math.atan2(ca + cb, d - sa - sb) - math.atan2(2.0, p)
-    return ((a - tmp) % (2.0 * math.pi)), p, ((b - tmp) % (2.0 * math.pi)), "RSL"
-
-
-def dubins_RLR(a: float, b: float, d: float) -> Optional[Tuple[float, float, float, str]]:
-    sa, sb = math.sin(a), math.sin(b)
-    ca, cb = math.cos(a), math.cos(b)
-    tmp = (6.0 - d * d + 2.0 * (ca * cb + sa * sb + d * (sa - sb))) / 8.0
-    if abs(tmp) > 1.0:
-        return None
-    p = (2.0 * math.pi - math.acos(tmp)) % (2.0 * math.pi)
-    t = (a - math.atan2(ca - cb, d - sa + sb) + p / 2.0) % (2.0 * math.pi)
-    q = (a - b - t + p) % (2.0 * math.pi)
-    return t, p, q, "RLR"
-
-
-def dubins_LRL(a: float, b: float, d: float) -> Optional[Tuple[float, float, float, str]]:
-    sa, sb = math.sin(a), math.sin(b)
-    ca, cb = math.cos(a), math.cos(b)
-    tmp = (6.0 - d * d + 2.0 * (ca * cb + sa * sb - d * (sa - sb))) / 8.0
-    if abs(tmp) > 1.0:
-        return None
-    p = (2.0 * math.pi - math.acos(tmp)) % (2.0 * math.pi)
-    t = (-a + math.atan2(-ca + cb, d + sa - sb) + p / 2.0) % (2.0 * math.pi)
-    q = (b - a - t + p) % (2.0 * math.pi)
-    return t, p, q, "LRL"
-
-
-def dubins_segment(s: float, x0: float, y0: float, th0: float, curv: float) -> Tuple[float, float, float]:
-    """Intègre un segment analytique Dubins de courbure constante."""
-    if abs(curv) < 1e-7:
-        return x0 + s * math.cos(th0), y0 + s * math.sin(th0), th0
-    else:
-        dth = s * curv
-        th = th0 + dth
-        dx = (math.sin(th) - math.sin(th0)) / curv
-        dy = (-math.cos(th) + math.cos(th0)) / curv
-        return x0 + dx, y0 + dy, th
-
-
-def sample_dubins_trajectory(
-    x0: float,
-    y0: float,
-    th0: float,
-    x1: float = 0.0,
-    y1: float = 0.0,
-    th1: float = 0.0,
-    r: float = R_MIN,
-    v_cruise: float = V_CRUISE,
-    dt: float = DT
-) -> List[Tuple[float, float, float, float, float]]:
-    """Génère la trajectoire continue optimale de Dubins vers la cible."""
-    dx = x1 - x0
-    dy = y1 - y0
-    D = math.hypot(dx, dy)
-    d = D / r
-    if d < 1e-5:
-        # Déjà sur la cible spatiale
-        return []
-
-    theta = math.atan2(dy, dx)
-    alpha = (th0 - theta) % (2.0 * math.pi)
-    beta = (th1 - theta) % (2.0 * math.pi)
-
-    best_cost = float("inf")
-    best_res = None
-    for solver in [dubins_LSL, dubins_RSR, dubins_LSR, dubins_RSL, dubins_RLR, dubins_LRL]:
-        res = solver(alpha, beta, d)
-        if res:
-            t, p, q, mode = res
-            if t + p + q < best_cost:
-                best_cost = t + p + q
-                best_res = res
-
-    if not best_res:
-        return []
-
-    t, p, q, mode = best_res
-    L1, L2, L3 = t * r, p * r, q * r
-    total_len = L1 + L2 + L3
-
-    curvs = []
-    for char in mode:
-        if char == "L":
-            curvs.append(+1.0 / r)
-        elif char == "R":
-            curvs.append(-1.0 / r)
-        else:
-            curvs.append(0.0)
-
-    p1 = dubins_segment(L1, x0, y0, th0, curvs[0])
-    p2 = dubins_segment(L2, p1[0], p1[1], p1[2], curvs[1])
-
-    pts = []
-    s = 0.0
-    decel_dist = 0.20  # Décélération fluide sur les 20 derniers cm
-
-    while s < total_len:
-        rem = total_len - s
-        if rem <= decel_dist:
-            v = max(0.05, v_cruise * (rem / decel_dist))
-        elif s < 0.10:
-            v = max(0.05, v_cruise * (s / 0.10))
-        else:
-            v = v_cruise
-
-        if s <= L1:
-            x, y, th = dubins_segment(s, x0, y0, th0, curvs[0])
-            w = v * curvs[0]
-        elif s <= L1 + L2:
-            x, y, th = dubins_segment(s - L1, p1[0], p1[1], p1[2], curvs[1])
-            w = v * curvs[1]
-        else:
-            x, y, th = dubins_segment(s - L1 - L2, p2[0], p2[1], p2[2], curvs[2])
-            w = v * curvs[2]
-
-        pts.append((x, y, th, v, w))
-        s += v * dt
-
-    # Maintien stationnaire à l'arrivée terminale exacte (8 pas ~ 0.40s)
-    for _ in range(8):
-        pts.append((x1, y1, th1, 0.0, 0.0))
-
-    return pts
-
-
-# ==============================================================================
-# TRAJECTOIRES DE MARCHE ARRIÈRE CONTINUE (BALIZA LISSE HERMITE)
-# ==============================================================================
-
-def sample_reverse_hermite_trajectory(
-    x0: float,
-    y0: float,
-    th0: float,
-    x1: float = 0.0,
-    y1: float = 0.0,
-    th1: float = 0.0,
-    v_cruise: float = 0.16,
-    dt: float = DT
-) -> List[Tuple[float, float, float, float, float]]:
-    """Génère une manœuvre de marche arrière continue et fluide (Classes 3, 4, 5)."""
-    d = math.hypot(x0 - x1, y0 - y1)
-    L0 = 1.0 * d
-    L1 = 0.75 * d
-    P0 = (x0, y0)
-    P1 = (x1, y1)
-    M0 = (-L0 * math.cos(th0), -L0 * math.sin(th0))
-    M1 = (-L1 * math.cos(th1), -L1 * math.sin(th1))
-
-    N_sub = 100
-    sub_pts = []
-    for i in range(N_sub + 1):
-        u = i / N_sub
-        h00 = 2.0 * u**3 - 3.0 * u**2 + 1.0
-        h10 = u**3 - 2.0 * u**2 + u
-        h01 = -2.0 * u**3 + 3.0 * u**2
-        h11 = u**3 - u**2
-        px = h00 * P0[0] + h10 * M0[0] + h01 * P1[0] + h11 * M1[0]
-        py = h00 * P0[1] + h10 * M0[1] + h01 * P1[1] + h11 * M1[1]
-        sub_pts.append((px, py))
-
-    total_len = sum(
-        math.hypot(sub_pts[i][0] - sub_pts[i - 1][0], sub_pts[i][1] - sub_pts[i - 1][1])
-        for i in range(1, len(sub_pts))
-    )
-
-    s = 0.0
-    pts = []
-    decel_dist = 0.20
-
-    while s < total_len:
-        u = min(1.0, s / total_len)
-        rem = total_len - s
-        if rem <= decel_dist:
-            v_mag = max(0.05, v_cruise * (rem / decel_dist))
-        elif s < 0.10:
-            v_mag = max(0.05, v_cruise * (s / 0.10))
-        else:
-            v_mag = v_cruise
-
-        h00 = 2.0 * u**3 - 3.0 * u**2 + 1.0
-        h10 = u**3 - 2.0 * u**2 + u
-        h01 = -2.0 * u**3 + 3.0 * u**2
-        h11 = u**3 - u**2
-        x = h00 * P0[0] + h10 * M0[0] + h01 * P1[0] + h11 * M1[0]
-        y = h00 * P0[1] + h10 * M0[1] + h01 * P1[1] + h11 * M1[1]
-
-        dh00 = 6.0 * u**2 - 6.0 * u
-        dh10 = 3.0 * u**2 - 4.0 * u + 1.0
-        dh01 = -6.0 * u**2 + 6.0 * u
-        dh11 = 3.0 * u**2 - 2.0 * u
-        dpx = dh00 * P0[0] + dh10 * M0[0] + dh01 * P1[0] + dh11 * M1[0]
-        dpy = dh00 * P0[1] + dh10 * M0[1] + dh01 * P1[1] + dh11 * M1[1]
-
-        ddh00 = 12.0 * u - 6.0
-        ddh10 = 6.0 * u - 4.0
-        ddh01 = -12.0 * u + 6.0
-        ddh11 = 6.0 * u - 2.0
-        ddpx = ddh00 * P0[0] + ddh10 * M0[0] + ddh01 * P1[0] + ddh11 * M1[0]
-        ddpy = ddh00 * P0[1] + ddh10 * M0[1] + ddh01 * P1[1] + ddh11 * M1[1]
-
-        speed_u = math.hypot(dpx, dpy)
-        if speed_u < 1e-6:
-            speed_u = 1e-6
-        curv = (dpx * ddpy - dpy * ddpx) / (speed_u**3)
-
-        th = math.atan2(-dpy, -dpx)
-        v_lin = -v_mag
-        w = max(-0.50, min(0.50, -curv * v_lin))
-
-        pts.append((x, y, th, v_lin, w))
-        s += v_mag * dt
-
-    for _ in range(8):
-        pts.append((x1, y1, th1, 0.0, 0.0))
-
-    return pts
-
-
-def expert_rule_based_controller(
-    x: float,
-    y: float,
-    theta: float,
-    tx: float = 0.0,
-    ty: float = 0.0,
-    ttheta: float = 0.0,
-    allow_reverse: bool = True
-) -> Tuple[float, float, int]:
-    """Contrôleur expert cinématique de compatibilité directe."""
-    ex = x - tx
-    ey = y - ty
-    dist = math.hypot(ex, ey)
-    e_theta = recast_angle(theta - ttheta)
-
-    if dist < 0.038 and abs(e_theta) < 0.040:
-        return 0.0, 0.0, 9
-
-    # Si très proche de la cible, correction purement angulaire vers theta = 0
-    if dist < 0.05:
-        w = max(-0.45, min(0.45, -1.2 * e_theta))
-        return 0.0, w, (7 if w > 0 else 8)
-
-    if allow_reverse and ex > 0.035 and dist < 4.5:
-        traj_rev = sample_reverse_hermite_trajectory(x, y, theta, tx, ty, ttheta, v_cruise=0.16, dt=DT)
-        if traj_rev:
-            for pt in traj_rev:
-                if abs(pt[3]) > 0.01 or abs(pt[4]) > 0.01:
-                    return pt[3], pt[4], classify_maneuver(pt[3], pt[4], dist)
-            return traj_rev[0][3], traj_rev[0][4], classify_maneuver(traj_rev[0][3], traj_rev[0][4], dist)
-
-    traj = sample_dubins_trajectory(x, y, theta, tx, ty, ttheta, r=R_MIN, v_cruise=V_CRUISE, dt=DT)
-    if traj:
-        for pt in traj:
-            if abs(pt[3]) > 0.01 or abs(pt[4]) > 0.01:
-                return pt[3], pt[4], classify_maneuver(pt[3], pt[4], dist)
-        return traj[0][3], traj[0][4], classify_maneuver(traj[0][3], traj[0][4], dist)
-
-    phi = math.atan2(-ey, -ex)
-    alpha = recast_angle(phi - theta)
-    target_v = min(V_CRUISE, max(0.08, 0.35 * dist))
-    target_w = max(-0.50, min(0.50, 1.2 * alpha))
-    return target_v, target_w, classify_maneuver(target_v, target_w, dist)
-
-
-# ==============================================================================
-# SÉLECTION DES SCÉNARIOS CARTÉSIENS PROPRES ET ÉQUILIBRÉS
-# ==============================================================================
-
-def generate_clean_scenarios() -> Tuple[List[Tuple[float, float, float]], List[Tuple[float, float, float]]]:
+def compute_discrete_action(
+    x_tr: float,
+    y_tr: float,
+    theta_r: float,
+    v_max: float = V_MAX,
+    w_max: float = W_MAX,
+    d_brake: float = D_BRAKE,
+    d_stop: float = D_STOP
+) -> Tuple[float, float]:
     """
-    Génère la macro-grille équilibrée :
-    - Demi-plan arrière (x <= 0) : Trajectoires d'avance Dubins directes (v > 0)
-    - Demi-plan avant (x >= 0)   : Manœuvres de baliza continue Hermite (v < 0)
-    - Tubes de perturbation (robustesse contre le covariate shift en boucle fermée)
+    Computes the optimal discrete action in {-v_max, 0, v_max} and {-w_max, 0, w_max}
+    given the robot-centric target coordinates (x_tr, y_tr) and absolute heading theta_r.
     """
-    angles_8 = [
-        0.0,
-        round(math.pi / 4.0, 3),
-        round(math.pi / 2.0, 3),
-        round(3.0 * math.pi / 4.0, 3),
-        round(math.pi, 3),
-        round(-3.0 * math.pi / 4.0, 3),
-        round(-math.pi / 2.0, 3),
-        round(-math.pi / 4.0, 3),
+    d = math.hypot(x_tr, y_tr)
+    e_theta = recast_angle(theta_r)
+
+    # 1. Terminal Docked Deadband (d <= d_stop, e.g. 5 cm)
+    if d <= d_stop:
+        v = 0.0
+        if abs(e_theta) <= 0.06:
+            w = 0.0
+        elif e_theta > 0:
+            w = -w_max  # Turn clockwise to bring theta_r -> 0
+        else:
+            w = w_max   # Turn counter-clockwise to bring theta_r -> 0
+        return v, w
+
+    # 2. Braking & Alignment Zone (d <= d_brake, e.g. 20 cm)
+    # The linear speed drops to 0.0 so the network learns to brake smoothly!
+    if d <= d_brake:
+        v = 0.0
+        if abs(e_theta) <= 0.08:
+            w = 0.0
+        elif e_theta > 0:
+            w = -w_max
+        else:
+            w = w_max
+        return v, w
+
+    # 3. Reverse Docking Zone (Target is directly behind: x_tr < -d_brake and |y_tr| <= 1.5 m)
+    if x_tr < -d_brake and abs(y_tr) <= 1.5:
+        v = -v_max
+        # Steering rear towards target:
+        # If target is behind to the left (y_tr > 0.08), swing rear left by turning clockwise (w = -w_max)
+        if y_tr > 0.08:
+            w = -w_max
+        elif y_tr < -0.08:
+            w = w_max
+        else:
+            w = 0.0
+        return v, w
+
+    # 4. General Approach Zone
+    # Bearing angle to target in the robot's local body frame
+    phi = math.atan2(y_tr, x_tr)
+
+    # If the target is far to the side (|phi| > 60 degrees = ~1.05 rad),
+    # execute pure rotation on the spot to face the target
+    if abs(phi) > 1.05:
+        v = 0.0
+        w = w_max if phi > 0 else -w_max
+        return v, w
+
+    # Target is in front (|phi| <= 60 degrees): Drive forward!
+    v = v_max
+
+    # Near the dock (d < 1.0 m), blend target bearing with dock alignment (theta_r -> 0)
+    if d < 1.0:
+        steer_err = phi + 0.5 * (-e_theta)
+    else:
+        steer_err = phi
+
+    if steer_err > 0.08:
+        w = w_max   # Turn left
+    elif steer_err < -0.08:
+        w = -w_max  # Turn right
+    else:
+        w = 0.0     # Drive straight
+
+    return v, w
+
+
+def generate_macro_grid(
+    x_max: float = X_MAX,
+    y_max: float = Y_MAX,
+    step_xy: float = 0.5,
+    num_angles: int = 25
+) -> List[Tuple[float, float, float, float, float]]:
+    """
+    Generates systematic grid samples over [-x_max, x_max] and [-y_max, y_max] every step_xy.
+    """
+    samples: List[Tuple[float, float, float, float, float]] = []
+
+    # Coordinates from -x_max to +x_max
+    n_steps_x = int(round(2 * x_max / step_xy))
+    xs = [round(-x_max + i * step_xy, 2) for i in range(n_steps_x + 1)]
+
+    n_steps_y = int(round(2 * y_max / step_xy))
+    ys = [round(-y_max + i * step_xy, 2) for i in range(n_steps_y + 1)]
+
+    # Angles across [-pi, +pi]
+    thetas = [round(-math.pi + i * (2 * math.pi / num_angles), 4) for i in range(num_angles + 1)]
+
+    for x in xs:
+        for y in ys:
+            for th in thetas:
+                v, w = compute_discrete_action(x, y, th)
+                samples.append((x, y, th, v, w))
+
+    return samples
+
+
+def generate_dense_docking_subgrid() -> List[Tuple[float, float, float, float, float]]:
+    """
+    Generates high-density samples around the docking station (|x| <= 0.6 m, |y| <= 0.6 m)
+    to provide high resolution for the braking threshold and zero-velocity equilibria.
+    """
+    samples: List[Tuple[float, float, float, float, float]] = []
+
+    # Fine positions from -0.6 to +0.6 with step 0.05 m
+    fine_steps = [round(v * 0.05, 3) for v in range(-12, 13)]
+    # Fine angles around 0
+    fine_thetas = [round(th * 0.05, 3) for th in range(-10, 11)] + [
+        round(math.pi / 4, 3), round(-math.pi / 4, 3),
+        round(math.pi / 2, 3), round(-math.pi / 2, 3),
+        round(math.pi, 3), round(-math.pi, 3)
     ]
 
-    ys = [-3.5, -2.5, -1.5, -0.8, -0.4, 0.0, 0.4, 0.8, 1.5, 2.5, 3.5]
-    fwd_scenarios: List[Tuple[float, float, float]] = []
-    rev_scenarios: List[Tuple[float, float, float]] = []
+    for x in fine_steps:
+        for y in fine_steps:
+            for th in fine_thetas:
+                v, w = compute_discrete_action(x, y, th)
+                samples.append((x, y, th, v, w))
 
-    # 1. Macro-grille arrière (x < 0) : Avance Dubins directe vers l'origine
-    fwd_xs = [-4.0, -3.0, -2.2, -1.5, -1.0, -0.6, -0.3, -0.15]
-    for x in fwd_xs:
-        for y in ys:
-            for th in angles_8:
-                fwd_scenarios.append((round(x, 2), round(y, 2), th))
+    return samples
 
-    # 2. Macro-grille avant (x > 0) : Baliza continue arrière Hermite vers l'origine
-    rev_xs = [0.15, 0.3, 0.6, 1.0, 1.5, 2.2, 3.0, 4.0]
-    for x in rev_xs:
-        for y in ys:
-            for th in angles_8:
-                rev_scenarios.append((round(x, 2), round(y, 2), th))
 
-    # 3. Axe neutre x = 0 (y != 0)
-    for y in ys:
-        if abs(y) < 0.05:
-            continue
-        for th in angles_8:
-            if abs(th) <= math.pi / 2.0:
-                rev_scenarios.append((0.0, round(y, 2), th))
-            else:
-                fwd_scenarios.append((0.0, round(y, 2), th))
+def simulate_rollout(
+    start_x_tr: float,
+    start_y_tr: float,
+    start_theta_r: float,
+    max_steps: int = 200
+) -> List[Tuple[float, float, float, float, float]]:
+    """
+    Simulates a closed-loop trajectory rollout at 20 Hz in the robot's relative frame.
+    In global frame, target is at (0, 0, 0), robot starts with relative pose.
+    """
+    rollout_samples: List[Tuple[float, float, float, float, float]] = []
 
-    # 4. Tubes de perturbation (Covariate Shift) autour des 20 scénarios étendus du benchmark
-    extended_scenarios = [
-        # Q1 (+X, +Y)
-        (1.0, 0.8, 0.0),
-        (2.0, 2.0, 0.0),
-        (1.5, 2.5, -round(math.pi / 2, 3)),
-        (2.2, 1.2, round(math.pi / 4, 3)),
-        (3.0, 1.5, round(math.pi, 3)),
-        # Q2 (-X, +Y)
-        (-1.0, 0.8, 0.0),
-        (-2.0, 2.0, 0.0),
-        (-2.5, 1.5, -round(math.pi / 2, 3)),
-        (-2.2, 1.2, -round(math.pi / 4, 3)),
-        (-3.0, 2.0, round(math.pi / 4, 3)),
-        # Q3 (-X, -Y)
-        (-1.0, -0.8, round(math.pi, 3)),
-        (-2.0, -2.0, round(math.pi, 3)),
-        (-1.5, -2.5, round(math.pi / 2, 3)),
-        (-2.2, -1.2, round(3 * math.pi / 4, 3)),
-        (-3.0, -1.8, 0.0),
-        # Q4 (+X, -Y)
-        (1.0, -0.8, -round(math.pi / 2, 3)),
-        (2.0, -2.0, -round(math.pi / 2, 3)),
-        (2.5, -1.5, round(math.pi, 3)),
-        (2.2, -1.2, -round(math.pi / 4, 3)),
-        (3.0, -1.8, -round(3 * math.pi / 4, 3)),
+    # Convert initial robot-relative target to global robot pose (assuming target at origin 0,0,0)
+    # x_tr = (0 - x_r)*cos(th) + (0 - y_r)*sin(th)
+    # y_tr = -(0 - x_r)*sin(th) + (0 - y_r)*cos(th)
+    # Inverting gives robot world pose:
+    th = recast_angle(start_theta_r)
+    cos_th = math.cos(th)
+    sin_th = math.sin(th)
+    rx = -(start_x_tr * cos_th - start_y_tr * sin_th)
+    ry = -(start_x_tr * sin_th + start_y_tr * cos_th)
+
+    for _ in range(max_steps):
+        th_norm = recast_angle(th)
+        cos_t = math.cos(th_norm)
+        sin_t = math.sin(th_norm)
+
+        # Compute relative target in robot frame
+        dx = 0.0 - rx
+        dy = 0.0 - ry
+        x_tr = dx * cos_t + dy * sin_t
+        y_tr = -dx * sin_t + dy * cos_t
+
+        v, w = compute_discrete_action(x_tr, y_tr, th_norm)
+        rollout_samples.append((round(x_tr, 4), round(y_tr, 4), round(th_norm, 4), v, w))
+
+        # Check stopping condition
+        dist = math.hypot(x_tr, y_tr)
+        if dist <= D_STOP and abs(th_norm) <= 0.05:
+            break
+
+        # Forward Euler kinematic update of unicycle at 20 Hz
+        rx += v * math.cos(th_norm) * DT
+        ry += v * math.sin(th_norm) * DT
+        th += w * DT
+
+    return rollout_samples
+
+
+def generate_rollouts() -> List[Tuple[float, float, float, float, float]]:
+    """
+    Simulates multiple rollouts starting from diverse points across the 5x5m arena.
+    """
+    samples: List[Tuple[float, float, float, float, float]] = []
+
+    start_positions = [
+        (-4.0, 0.0), (-3.0, 1.5), (-3.0, -1.5), (-2.0, 2.0), (-2.0, -2.0),
+        (-1.5, 0.0), (-1.0, 1.0), (-1.0, -1.0), (-0.5, 0.5), (-0.5, -0.5),
+        (1.0, 0.0), (2.0, 1.0), (2.0, -1.0), (3.0, 0.0), (1.5, 1.5), (1.5, -1.5),
+        (0.0, 2.0), (0.0, -2.0), (0.0, 3.5), (0.0, -3.5), (4.0, 2.0), (-4.0, -2.0)
+    ]
+    start_headings = [
+        0.0, round(math.pi / 4, 3), round(-math.pi / 4, 3),
+        round(math.pi / 2, 3), round(-math.pi / 2, 3),
+        round(3 * math.pi / 4, 3), round(-3 * math.pi / 4, 3), round(math.pi, 3)
     ]
 
-    for cx, cy, cth in extended_scenarios:
-        for dx in [-0.15, 0.0, 0.15]:
-            for dy in [-0.15, 0.0, 0.15]:
-                for dth in [-0.15, 0.0, 0.15]:
-                    px = round(cx + dx, 3)
-                    py = round(cy + dy, 3)
-                    pth = round(recast_angle(cth + dth), 3)
-                    if px <= 0:
-                        fwd_scenarios.append((px, py, pth))
-                    else:
-                        rev_scenarios.append((px, py, pth))
+    for sx, sy in start_positions:
+        for sth in start_headings:
+            traj = simulate_rollout(sx, sy, sth)
+            samples.extend(traj)
 
-    # 5. Funil terminal d'accostage haute densité (reprise de dataset-v1)
-    for fx in [-0.8, -0.6, -0.4, -0.2]:
-        for fy in [-0.4, -0.2, 0.0, 0.2, 0.4]:
-            for dx in [-0.08, 0.08]:
-                for dy in [-0.08, 0.08]:
-                    for th in [0.0, round(math.pi / 4, 3), round(-math.pi / 4, 3)]:
-                        fwd_scenarios.append((round(fx + dx, 2), round(fy + dy, 2), th))
-
-    for rx in [0.2, 0.4, 0.6, 0.8]:
-        for ry in [-0.4, -0.2, 0.0, 0.2, 0.4]:
-            for dx in [-0.08, 0.08]:
-                for dy in [-0.08, 0.08]:
-                    for th in [0.0, round(math.pi / 4, 3), round(-math.pi / 4, 3)]:
-                        rev_scenarios.append((round(rx + dx, 2), round(ry + dy, 2), th))
-
-    return fwd_scenarios, rev_scenarios
+    return samples
 
 
-def generate_terminal_alignment_samples() -> List[Dict[str, float]]:
+def apply_bilateral_symmetry(
+    samples: List[Tuple[float, float, float, float, float]]
+) -> List[Tuple[float, float, float, float, float]]:
     """
-    Génère des échantillons d'alignement angulaire de haute précision au cais :
-    Dans la zone d'accostage R <= 0.15 m, si theta != 0, le robot effectue une rotation pure
-    ou une insertion régulée pour forcer le cap à converger exactement vers theta = 0.
-    À l'équilibre parfait (x=0, y=0, theta=0), v=0 et w=0.
+    Applies sagittal reflection symmetry to perfectly balance left/right turning:
+    y_target -> -y_target, theta_robot -> -theta_robot, w_robot -> -w_robot.
     """
-    terminal_samples: List[Dict[str, float]] = []
-    radii = [0.0, 0.02, 0.05, 0.08, 0.12, 0.15]
-    num_thetas = 36  # Discrétisation tous les 10 degrés sur [-pi, pi]
+    augmented: List[Tuple[float, float, float, float, float]] = []
+    seen = set()
 
-    for r in radii:
-        num_pos_angles = 1 if r == 0.0 else 16
-        for p_idx in range(num_pos_angles):
-            pos_angle = p_idx * (2.0 * math.pi / num_pos_angles)
-            x_r = round(r * math.cos(pos_angle), 4)
-            y_r = round(r * math.sin(pos_angle), 4)
+    for x, y, th, v, w in samples:
+        key = (round(x, 3), round(y, 3), round(th, 3))
+        if key not in seen:
+            seen.add(key)
+            augmented.append((x, y, th, v, w))
 
-            for t_idx in range(num_thetas):
-                th = -math.pi + t_idx * (2.0 * math.pi / num_thetas)
-                th_r = round(recast_angle(th), 4)
+        # Mirror sample
+        mx = x
+        my = -y
+        mth = recast_angle(-th)
+        mv = v
+        mw = -w
 
-                if r < 0.025 and abs(th_r) < 0.04:
-                    v_r = 0.0
-                    w_r = 0.0
-                elif r <= 0.06:
-                    v_r = 0.0
-                    w_r = round(max(-0.45, min(0.45, -1.2 * th_r)), 4)
-                else:
-                    phi = math.atan2(-y_r, -x_r)
-                    alpha = recast_angle(phi - th_r)
-                    if abs(alpha) < math.pi / 4.0:
-                        v_r = round(max(0.04, 0.30 * r), 4)
-                        w_r = round(max(-0.45, min(0.45, 1.0 * alpha - 0.6 * th_r)), 4)
-                    else:
-                        v_r = 0.0
-                        w_r = round(max(-0.45, min(0.45, -1.2 * th_r)), 4)
+        mkey = (round(mx, 3), round(my, 3), round(mth, 3))
+        if mkey not in seen:
+            seen.add(mkey)
+            augmented.append((mx, my, mth, mv, mw))
 
-                terminal_samples.append({
-                    "x_r": x_r,
-                    "y_r": y_r,
-                    "theta_r": th_r,
-                    "v_r": v_r,
-                    "w_r": w_r
-                })
-
-    return terminal_samples
+    return augmented
 
 
-def mirror_sample(s: Dict[str, float]) -> Dict[str, float]:
-    """Applique la symétrie sagittale bilatérale stricte : (x, -y, -th, v, -w)."""
-    return {
-        "x_r": s["x_r"],
-        "y_r": -s["y_r"] if abs(s["y_r"]) > 1e-9 else 0.0,
-        "theta_r": -s["theta_r"] if abs(s["theta_r"]) > 1e-9 else 0.0,
-        "v_r": s["v_r"],
-        "w_r": -s["w_r"] if abs(s["w_r"]) > 1e-9 else 0.0
-    }
-
-
-def generate_rule_based_dataset(
-    output_path: str = "data/curated/v2/handcrafted_dataset.csv",
-    apply_mirroring: bool = True,
-    stride: int = 2
-) -> int:
-    """
-    Génère le dataset complet V2 à 5 colonnes (x_r, y_r, theta_r, v_r, w_r)
-    garantissant la convergence vers (x=0, y=0, theta=0) avec vitesses nulles.
-    """
-    print("\n" + "=" * 78)
-    print("--- GÉNÉRATION DU JEU DE DONNÉES EXPERT LIMO (VERSION 2 - 5 COLONNES) ---")
-    print("Contrat : Convergence à 100% vers la pose cible (0.0, 0.0, 0.0) à 20 Hz")
-    print(f"Fichier de sortie : {output_path}")
-    print(f"Facteur de foulée : stride={stride}")
-    print("=" * 78 + "\n")
-
-    fwd_scenarios, rev_scenarios = generate_clean_scenarios()
-    total_scenarios_count = len(fwd_scenarios) + len(rev_scenarios)
-    print(f"Scénarios sélectionnés : {total_scenarios_count} au total ({len(fwd_scenarios)} Avance | {len(rev_scenarios)} Baliza Ré)")
-
-    samples: List[Dict[str, float]] = []
-    tx, ty, tth = 0.0, 0.0, 0.0
-    converged_fwd = 0
-    converged_rev = 0
-
-    # 1. Trajectoires d'avance Dubins (x <= 0)
-    for fx, fy, fth in fwd_scenarios:
-        traj = sample_dubins_trajectory(fx, fy, fth, tx, ty, tth, r=R_MIN, v_cruise=V_CRUISE, dt=DT)
-        if not traj:
-            continue
-        converged_fwd += 1
-
-        for step, (x, y, theta, v_lin, v_ang) in enumerate(traj):
-            if stride > 1 and step % stride != 0 and step < len(traj) - 5:
-                continue
-            samples.append({
-                "x_r": round(x - tx, 4),
-                "y_r": round(y - ty, 4),
-                "theta_r": round(recast_angle(theta - tth), 4),
-                "v_r": round(v_lin, 4),
-                "w_r": round(v_ang, 4),
-            })
-
-    # 2. Trajectoires de baliza continue arrière Hermite (x >= 0)
-    for rx, ry, rth in rev_scenarios:
-        traj = sample_reverse_hermite_trajectory(rx, ry, rth, tx, ty, tth, v_cruise=0.16, dt=DT)
-        if not traj:
-            continue
-        converged_rev += 1
-
-        for step, (x, y, theta, v_lin, v_ang) in enumerate(traj):
-            if stride > 1 and step % stride != 0 and step < len(traj) - 5:
-                continue
-            samples.append({
-                "x_r": round(x - tx, 4),
-                "y_r": round(y - ty, 4),
-                "theta_r": round(recast_angle(theta - tth), 4),
-                "v_r": round(v_lin, 4),
-                "w_r": round(v_ang, 4),
-            })
-
-    # 3. Échantillons d'alignement angulaire terminal (Heading Alignment à theta = 0)
-    term_samples = generate_terminal_alignment_samples()
-    samples.extend(term_samples)
-    print(f"[Alignement Terminal] +{len(term_samples)} échantillons d'alignement theta = 0 ajoutés.")
-
-    total_samples = list(samples)
-
-    # 4. Augmentation par symétrie sagittale bilatérale (y <-> -y, w <-> -w)
-    if apply_mirroring:
-        mirrored = [mirror_sample(s) for s in samples]
-        total_samples.extend(mirrored)
-        print(f"[Augmentation] Symétrie bilatérale appliquée : +{len(mirrored)} échantillons générés.")
-
-    # 5. Écriture du fichier CSV avec l'en-tête strict à 5 colonnes
-    os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
-    with open(output_path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=COLONNES_V2)
-        writer.writeheader()
-        writer.writerows(total_samples)
-
-    total_converged = converged_fwd + converged_rev
-    pct_conv = (total_converged / total_scenarios_count) * 100.0
-
-    print("\n" + "=" * 78)
-    print(f"CONVERGENCE DES SCÉNARIOS    : {total_converged}/{total_scenarios_count} ont convergé ({pct_conv:.1f}%)")
-    print(f"  - Trajectoires avant Dubins: {converged_fwd}/{len(fwd_scenarios)} (100.0%)")
-    print(f"  - Baliza arrière Hermite   : {converged_rev}/{len(rev_scenarios)} (100.0%)")
-    print(f"ALIGNEMENT TERMINAL THETA=0  : Garanti par courbure tangente + rotation d'accostage")
-    print(f"ÉCHANTILLONS TOTAUX DU DATASET: {len(total_samples)} pas de temps à 20 Hz")
-    print(f"FICHIER CSV GÉNÉRÉ (5 COLS)  : {output_path}")
-    print("=" * 78 + "\n")
-
-    return len(total_samples)
-
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        description="Générateur de données d'apprentissage hors ligne expert LIMO (Dubins + Hermite - Schéma 5 colonnes V2)."
-    )
+def main():
+    parser = argparse.ArgumentParser(description="Generate LIMO robot-centric relative dataset.")
     parser.add_argument(
         "--output",
         type=str,
-        default="data/curated/v2/handcrafted_dataset.csv",
-        help="Chemin du fichier CSV de sortie (défaut: data/curated/v2/handcrafted_dataset.csv)"
+        default="data/dataset.csv",
+        help="Target output CSV file path (default: data/dataset.csv)."
     )
     parser.add_argument(
-        "--no-mirror",
-        action="store_true",
-        help="Désactive l'augmentation par symétrie bilatérale"
+        "--x-max",
+        type=float,
+        default=X_MAX,
+        help="Max X coordinate limit in meters (default: 5.0)."
     )
     parser.add_argument(
-        "--stride",
-        type=int,
-        default=2,
-        help="Facteur de sous-échantillonnage temporel des trajectoires (défaut: 2)"
+        "--y-max",
+        type=float,
+        default=Y_MAX,
+        help="Max Y coordinate limit in meters (default: 5.0)."
+    )
+    parser.add_argument(
+        "--step-xy",
+        type=float,
+        default=0.5,
+        help="Spatial grid resolution step in meters (default: 0.5)."
     )
     args = parser.parse_args()
 
-    generate_rule_based_dataset(
-        output_path=args.output,
-        apply_mirroring=not args.no_mirror,
-        stride=args.stride
-    )
+    os.makedirs(os.path.dirname(args.output), exist_ok=True)
+
+    print("\n" + "=" * 65)
+    print("--- GENERATING ROBOT-CENTRIC DISCRETE DATASET (V2) ---")
+    print(f"Spatial Arena Limit  : [-{args.x_max}, +{args.x_max}] x [-{args.y_max}, +{args.y_max}] m")
+    print(f"Grid Step Resolution : {args.step_xy} m")
+    print(f"Linear Actions       : {{-{V_MAX}, 0.0, +{V_MAX}}} m/s")
+    print(f"Angular Actions      : {{-{W_MAX}, 0.0, +{W_MAX}}} rad/s")
+    print(f"Braking Threshold    : {D_BRAKE} m (v=0.0)")
+    print(f"Output File          : {args.output}")
+    print("=" * 65 + "\n")
+
+    # 1. Macro Grid Generation
+    print("1/4 Generating systematic macro-grid (0.5m interval)...")
+    grid_samples = generate_macro_grid(x_max=args.x_max, y_max=args.y_max, step_xy=args.step_xy)
+    print(f"    Macro-grid samples: {len(grid_samples):,}")
+
+    # 2. Dense Docking Subgrid Generation
+    print("2/4 Generating high-density terminal docking subgrid...")
+    dock_samples = generate_dense_docking_subgrid()
+    print(f"    Docking subgrid samples: {len(dock_samples):,}")
+
+    # 3. Dynamic Rollouts
+    print("3/4 Generating closed-loop dynamic trajectory rollouts (20 Hz)...")
+    rollout_samples = generate_rollouts()
+    print(f"    Rollout samples: {len(rollout_samples):,}")
+
+    all_raw = grid_samples + dock_samples + rollout_samples
+
+    # 4. Bilateral Symmetry Augmentation & Deduplication
+    print("4/4 Applying bilateral sagittal symmetry and deduplication...")
+    final_dataset = apply_bilateral_symmetry(all_raw)
+    print(f"    Consolidated unique dataset size: {len(final_dataset):,} samples")
+
+    # Save to CSV
+    with open(args.output, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(COLUMNS)
+        for row in final_dataset:
+            writer.writerow(row)
+
+    # Synchronisation miroir vers data/curated/v2/ pour rétrocompatibilité
+    curated_path = os.path.join(_project_root, "data", "curated", "v2", "handcrafted_dataset.csv")
+    if os.path.abspath(args.output) != os.path.abspath(curated_path):
+        os.makedirs(os.path.dirname(curated_path), exist_ok=True)
+        with open(curated_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(COLUMNS)
+            for row in final_dataset:
+                writer.writerow(row)
+
+    # Compute Statistics
+    v_counts = { -V_MAX: 0, 0.0: 0, V_MAX: 0 }
+    w_counts = { -W_MAX: 0, 0.0: 0, W_MAX: 0 }
+    for _, _, _, v, w in final_dataset:
+        v_key = round(v, 2)
+        w_key = round(w, 2)
+        if v_key in v_counts:
+            v_counts[v_key] += 1
+        if w_key in w_counts:
+            w_counts[w_key] += 1
+
+    print("\n--- DATASET STATISTICAL DISTRIBUTION ---")
+    print(f"v_robot = -{V_MAX} m/s : {v_counts[-V_MAX]:>6} ({100.0 * v_counts[-V_MAX] / len(final_dataset):.1f}%)")
+    print(f"v_robot =  0.00 m/s : {v_counts[0.0]:>6} ({100.0 * v_counts[0.0] / len(final_dataset):.1f}%)")
+    print(f"v_robot = +{V_MAX} m/s : {v_counts[V_MAX]:>6} ({100.0 * v_counts[V_MAX] / len(final_dataset):.1f}%)")
+    print(f"w_robot = -{W_MAX} rad/s: {w_counts[-W_MAX]:>6} ({100.0 * w_counts[-W_MAX] / len(final_dataset):.1f}%)")
+    print(f"w_robot =  0.00 rad/s: {w_counts[0.0]:>6} ({100.0 * w_counts[0.0] / len(final_dataset):.1f}%)")
+    print(f"w_robot = +{W_MAX} rad/s: {w_counts[W_MAX]:>6} ({100.0 * w_counts[W_MAX] / len(final_dataset):.1f}%)")
+    print(f"\n[Success] Dataset saved to: {args.output}\n")
+
+
+if __name__ == "__main__":
+    main()
