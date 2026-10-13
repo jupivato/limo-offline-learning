@@ -139,14 +139,29 @@ class DataLogger:
         gs = GridSpec(3, 3, figure=fig)
 
         ax = fig.add_subplot(gs[0:2, 0])
-        ax.plot(x, y, "b-", linewidth=1)
-        ax.plot(x[0], y[0], "go", markersize=8, label="start")
-        ax.plot(0, 0, "r*", markersize=12, label="target")
-        ax.set_title("Trajectoire XY")
+        ax.plot(x, y, "b-", linewidth=1.5, label="trajectoire")
+        ax.plot(x[0], y[0], "go", markersize=8, label="départ")
+        ax.plot(x[-1], y[-1], "s", color="#e74c3c", markersize=7, label="arrivée")
+        ax.plot(0, 0, "r*", markersize=14, label="cible (0,0)")
+
+        # Flèche d'orientation initiale (cap départ)
+        arr_len = 0.20
+        ax.annotate("", xy=(x[0] + arr_len * math.cos(th[0]), y[0] + arr_len * math.sin(th[0])), xytext=(x[0], y[0]),
+                    arrowprops=dict(arrowstyle="-|>", color="#27ae60", lw=2.5, mutation_scale=16))
+
+        # Flèche d'orientation finale (cap arrivée)
+        ax.annotate("", xy=(x[-1] + arr_len * math.cos(th[-1]), y[-1] + arr_len * math.sin(th[-1])), xytext=(x[-1], y[-1]),
+                    arrowprops=dict(arrowstyle="-|>", color="#e74c3c", lw=2.5, mutation_scale=16))
+
+        # Flèche d'orientation désirée à la cible (theta=0)
+        ax.annotate("", xy=(0.20, 0.0), xytext=(0.0, 0.0),
+                    arrowprops=dict(arrowstyle="-|>", color="#f39c12", lw=2.0, mutation_scale=14))
+
+        ax.set_title("Trajectoire XY & Caps (Départ/Arrivée)")
         ax.set_xlabel("x (m)")
         ax.set_ylabel("y (m)")
-        ax.legend()
-        ax.grid(True)
+        ax.legend(loc="best", fontsize=8.5)
+        ax.grid(True, linestyle="--", alpha=0.6)
         ax.set_aspect("equal", adjustable="datalim")
 
         ax2 = fig.add_subplot(gs[0, 1])
@@ -181,11 +196,13 @@ class DataLogger:
         ax5.grid(True)
 
         ax6 = fig.add_subplot(gs[2, 1])
-        ax6.plot(t, g0, label="grad v_lin")
-        ax6.plot(t, g1, label="grad v_ang")
-        ax6.set_title("Gradient")
+        dists = [math.hypot(xi, yi) for xi, yi in zip(x, y)]
+        ax6.plot(t, dists, color="#8e44ad", linewidth=1.5, label="distance (m)")
+        ax6.axhline(y=0.20, color="#e67e22", linestyle="--", label="freinage (0.2m)")
+        ax6.axhline(y=0.05, color="#27ae60", linestyle="-.", label="arrêt (0.05m)")
+        ax6.set_title("Distance à la Cible (m)")
         ax6.set_xlabel("t (s)")
-        ax6.legend()
+        ax6.legend(fontsize=8)
         ax6.grid(True)
 
         ax7 = fig.add_subplot(gs[2, 2])
