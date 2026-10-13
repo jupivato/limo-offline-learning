@@ -1,11 +1,9 @@
 {
-    "approach": "v2_relative",
-    "description": "Offline learning V2 with robot-centric relative coordinates and discrete actions {-vmax, 0, +vmax} & {-wmax, 0, +wmax}",
+    "description": "Offline learning for AgileX LIMO with robot-centric relative coordinates and discrete actions {-vmax, 0, +vmax} & {-wmax, 0, +wmax}",
     "dataset": {
         "schema": "robot_centric_5_columns",
         "columns": ["x_target_robot", "y_target_robot", "theta_robot", "v_robot", "w_robot"],
         "path": "data/dataset.csv",
-        "legacy_path": "data/curated/v2/handcrafted_dataset.csv",
         "x_max": 5.0,
         "y_max": 5.0,
         "step_xy": 0.5,
@@ -44,6 +42,6 @@
         "d_stop": 0.05
     },
     "evaluation": {
-        "output_dir": "data/evaluation/v2/batch_run"
+        "output_dir": "data/evaluation/batch_run"
     }
 }

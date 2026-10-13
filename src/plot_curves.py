@@ -18,7 +18,7 @@ import argparse
 from typing import Dict, Any
 
 # Inclusion automatique du dossier racine du projet dans sys.path
-_project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+_project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
@@ -44,8 +44,8 @@ except ImportError:
 
 
 def plot_training_history(
-    history_file_path: str = "models/v2/training_history.json",
-    output_dir: str = "data/evaluation/v2"
+    history_file_path: str = "models/training_history.json",
+    output_dir: str = "data/evaluation"
 ) -> Dict[str, str]:
     """
     Trace et sauvegarde les courbes de convergence de l'entraînement hors ligne.
@@ -60,8 +60,7 @@ def plot_training_history(
     if not os.path.exists(history_file_path):
         candidates = [
             os.path.join(_project_root, history_file_path),
-            os.path.join(_project_root, "models", "training_history.json"),
-            os.path.join(_project_root, "models", "v2", "training_history.json")
+            os.path.join(_project_root, "models", "training_history.json")
         ]
         found = False
         for c in candidates:
@@ -138,10 +137,10 @@ def plot_training_history(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Générateur de graphiques d'entraînement pour LIMO.")
-    parser.add_argument("--history", type=str, default="models/v2/training_history.json",
-                        help="Chemin du fichier JSON d'historique (défaut: models/v2/training_history.json)")
-    parser.add_argument("--outdir", type=str, default="data/evaluation/v2",
-                        help="Dossier de sortie des graphiques (défaut: data/evaluation/v2)")
+    parser.add_argument("--history", type=str, default="models/training_history.json",
+                        help="Chemin du fichier JSON d'historique (défaut: models/training_history.json)")
+    parser.add_argument("--outdir", type=str, default="data/evaluation",
+                        help="Dossier de sortie des graphiques (défaut: data/evaluation)")
     args = parser.parse_args()
 
     plot_training_history(history_file_path=args.history, output_dir=args.outdir)

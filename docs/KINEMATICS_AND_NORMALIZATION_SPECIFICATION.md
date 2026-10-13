@@ -124,7 +124,7 @@ $$in_2 = \frac{\theta_{\text{robot}}}{\pi} \in [-1.0, +1.0]$$
 Because PioneerNN defines its output layer as:
 $$\text{output} = \text{Tanh}(\text{Linear}(1000, 2)) \implies \hat{\mathbf{u}} \in (-1.0, +1.0)^2$$
 
-During offline training in [`train_offline.py`](../../src/approaches/v2_relative/train_offline.py), raw velocities $(v_{\text{robot}}, w_{\text{robot}})$ are normalized:
+During offline training in [`train_offline.py`](../src/train_offline.py), raw velocities $(v_{\text{robot}}, w_{\text{robot}})$ are normalized:
 $$y_v = \frac{v_{\text{robot}}}{V_{\max}} \in \{-1.0, \; 0.0, \; +1.0\}$$
 $$y_\omega = \frac{w_{\text{robot}}}{\Omega_{\max}} \in \{-1.0, \; 0.0, \; +1.0\}$$
 
@@ -179,7 +179,7 @@ robot.set_cmd_vel(v_cmd, w_cmd)
 
 ## 6. Empirical Dataset Validation (V2 Distribution)
 
-Executing [`generate_dataset.py`](../../src/approaches/v2_relative/generate_dataset.py) over the $5\times 5\text{ m}$ domain with step $0.5\text{ m}$, terminal docking subgrid, and 20 Hz dynamic rollouts generates **70,664 unique samples** with the following exact statistical distribution:
+Executing [`generate_dataset.py`](../src/generate_dataset.py) over the $5\times 5\text{ m}$ domain with step $0.5\text{ m}$, terminal docking subgrid, and 20 Hz dynamic rollouts generates **70,664 unique samples** with the following exact statistical distribution:
 
 ### Linear Velocity ($v_{\text{robot}}$)
 ```text

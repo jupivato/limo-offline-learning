@@ -34,7 +34,7 @@ import argparse
 from typing import List, Dict, Any, Tuple
 
 # Project root path resolution
-_project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+_project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
@@ -366,16 +366,6 @@ def main():
         writer.writerow(COLUMNS)
         for row in final_dataset:
             writer.writerow(row)
-
-    # Synchronisation miroir vers data/curated/v2/ pour rétrocompatibilité
-    curated_path = os.path.join(_project_root, "data", "curated", "v2", "handcrafted_dataset.csv")
-    if os.path.abspath(args.output) != os.path.abspath(curated_path):
-        os.makedirs(os.path.dirname(curated_path), exist_ok=True)
-        with open(curated_path, "w", newline="", encoding="utf-8") as f:
-            writer = csv.writer(f)
-            writer.writerow(COLUMNS)
-            for row in final_dataset:
-                writer.writerow(row)
 
     # Compute Statistics
     v_counts = { -V_MAX: 0, 0.0: 0, V_MAX: 0 }

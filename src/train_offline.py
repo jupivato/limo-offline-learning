@@ -30,7 +30,7 @@ import argparse
 from typing import Tuple, Dict, Any, List, Optional
 
 # Project root resolution
-_project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+_project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
@@ -99,7 +99,6 @@ def load_dataset_samples(csv_file_path: str) -> Tuple[List[List[float]], List[Li
         candidates = [
             os.path.join(_project_root, csv_file_path),
             os.path.join(_project_root, "data", "dataset.csv"),
-            os.path.join(_project_root, "data", "curated", "v2", "handcrafted_dataset.csv"),
             os.path.abspath(csv_file_path)
         ]
         found = False
@@ -591,24 +590,11 @@ def save_and_finalize_model(
         json.dump(best_weights_json, f, indent=2)
     print(f"[Succès] Poids sauvegardés dans : {weights_output_path}")
 
-    # Mirror save to models/v2/
-    v2_weights = os.path.join(_project_root, "models", "v2", "supervised_w_torch_diff.json")
-    if os.path.abspath(weights_output_path) != os.path.abspath(v2_weights):
-        os.makedirs(os.path.dirname(v2_weights), exist_ok=True)
-        with open(v2_weights, "w", encoding="utf-8") as f:
-            json.dump(best_weights_json, f, indent=2)
-
     # History save
     os.makedirs(os.path.dirname(os.path.abspath(history_output_path)), exist_ok=True)
     with open(history_output_path, "w", encoding="utf-8") as f:
         json.dump(history, f, indent=2)
     print(f"[Succès] Historique sauvegardé dans : {history_output_path}")
-
-    v2_history = os.path.join(_project_root, "models", "v2", "training_history.json")
-    if os.path.abspath(history_output_path) != os.path.abspath(v2_history):
-        os.makedirs(os.path.dirname(v2_history), exist_ok=True)
-        with open(v2_history, "w", encoding="utf-8") as f:
-            json.dump(history, f, indent=2)
 
     return {
         "best_val_loss": best_val_loss,
