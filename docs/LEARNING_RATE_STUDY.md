@@ -44,9 +44,21 @@ Le tableau ci-dessous synthétise les performances d'optimisation et les métriq
 
 *Exigences normatives ISO 18646-2 : Précision de position $A_p < 0.25\text{ m}$ | Précision d'orientation $A_o < 15.0^\circ$.*
 
+### Graphiques Métrologiques ISO 18646-2 vs Learning Rate
+
+![Métriques ISO 18646-2 vs Learning Rate](images/lr_iso_metrics_ablation.png)
+
+### Dynamique de Convergence (Train & Validation Loss)
+
+![Courbes de convergence de Loss](images/lr_convergence_comparison.png)
+
 ---
 
 ## 4. Analyse Détaillée par Régime
+
+### Comparaison des Trajectoires 2D (Scénario Départ x=2.0m, y=2.0m)
+
+![Trajectoires en Boucle Fermée](images/lr_trajectories_comparison.png)
 
 ### Régime A : Taux Trop Faible ($\eta = 0.0001$) — *Sous-apprentissage*
 - **Symptôme** : Après 30 époques, la loss stagne encore à $0.6790$.

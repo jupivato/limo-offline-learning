@@ -49,6 +49,7 @@ res/
 *.png
 *.jpg
 *.svg
+!docs/images/**
 models/**/training_history.json
 
 # Keep empty data folders tracked
