@@ -100,40 +100,6 @@ def plot_single_learning_curve(lr, ep_count, epochs_hist, train_loss_hist, val_l
                  fontsize=12, fontweight="bold", pad=12, color="#0f172a")
 
     ax.set_xlim(1, ep_count)
-    
-    # Check for loss spikes
-    has_spikes = any(l > 0.5 for l in val_loss_hist)
-    
-    # Diagnostic box
-    init_loss = val_loss_hist[0]
-    final_loss = val_loss_hist[-1]
-    
-    if has_spikes:
-        diag = "Picos de gradiente detectados (Overshoot)"
-        box_bg = "#fee2e2"
-        box_border = "#ef4444"
-    elif ep_count == 30 and lr == 0.001:
-        diag = "Sub-ajuste inicial (poucas épocas para LR baixa)"
-        box_bg = "#f1f5f9"
-        box_border = "#94a3b8"
-    else:
-        diag = "Convergência suave e consistente"
-        box_bg = "#dcfce7"
-        box_border = "#22c55e"
-
-    info_text = (
-        f"• Taxa de Aprendizagem (LR): {lr}\n"
-        f"• Orçamento: {ep_count} épocas\n"
-        f"• Perda Inicial (Val): {init_loss:.4f}\n"
-        f"• Perda Final (Val): {final_loss:.4f}\n"
-        f"• Melhor Perda (Val): {min_val:.4f} (Ép. {min_epoch})\n"
-        f"• Diagnóstico: {diag}"
-    )
-    
-    # Place text box in an empty spot (upper right if loss drops fast)
-    ax.text(0.04, 0.15, info_text, transform=ax.transAxes, fontsize=9.5,
-            bbox=dict(boxstyle="round,pad=0.5", fc=box_bg, ec=box_border, lw=1.2), zorder=6)
-
     ax.legend(framealpha=0.95, facecolor="#ffffff", edgecolor="#cbd5e1", fontsize=9.5, loc="upper right")
 
     plt.tight_layout()
