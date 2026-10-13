@@ -63,6 +63,7 @@ limo-offline-learning/
 │       └── batch_run/                   # Benchmark runs, telemetry logs, & trajectory plots
 ├── docs/
 │   ├── KINEMATICS_AND_NORMALIZATION_SPECIFICATION.md # Mathematical derivations & limits
+│   ├── LEARNING_RATE_STUDY.md                        # Empirical hyperparameter study on LR & AdamW
 │   └── PLANIFICATION_APPRENTISSAGE_HORS_LIGNE.md     # Experimental planning
 ├── models/
 │   ├── supervised_w_torch_diff.json     # Trained neural weights (JSON format)
@@ -91,7 +92,8 @@ limo-offline-learning/
 
 ## 🔬 Kinematic Specifications & Normalization
 
-For complete mathematical derivations, stability proofs, and friction stopping distances, see [KINEMATICS_AND_NORMALIZATION_SPECIFICATION.md](docs/KINEMATICS_AND_NORMALIZATION_SPECIFICATION.md).
+For complete mathematical derivations, stability proofs, and friction stopping distances, see [KINEMATICS_AND_NORMALIZATION_SPECIFICATION.md](docs/KINEMATICS_AND_NORMALIZATION_SPECIFICATION.md).  
+For the empirical ablation study on learning rates and optimizer selection, see [LEARNING_RATE_STUDY.md](docs/LEARNING_RATE_STUDY.md).
 
 ### Summary Table of Parameters
 
