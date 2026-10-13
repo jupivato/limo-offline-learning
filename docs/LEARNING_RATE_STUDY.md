@@ -196,3 +196,10 @@ Chaque graphique ci-dessous est totalement autonome : il ne comporte aucune zone
 2. **Élimination Définitive des Picos Artificiels** :
    - En supprimant la division par $\sqrt{v_t}$ propre à AdamW, **aucun saut brutal de perte ni pic d'explosion n'a été observé** sur aucune des 20 configurations de SGD pur.
    - Les courbes obtenues reflètent avec une fidélité absolue la physique du gradient mathématique.
+
+---
+
+## 5. Documents Connexes
+
+- **Explication Mathématique et Théorique de la Perte** : Consulter [`docs/EXPLICATION_PERTE_MSE.md`](EXPLICATION_PERTE_MSE.md) pour la démonstration détaillée montrant pourquoi une perte finale de $\approx 0.50$ représente $60\%$ de variance expliquée et constitue la zone nominale optimale en clonage comportemental.
+
