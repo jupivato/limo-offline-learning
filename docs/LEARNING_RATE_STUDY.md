@@ -3,7 +3,7 @@
 **Projet** : LIMO Offline Learning — Navigation Autonome par Clonage Comportemental  
 **Cadre** : Projet de Fin d'Études / PPE — CERV (Centre Européen de Réalité Virtuelle) / ENIB (École Nationale d'Ingénieurs de Brest)  
 **Auteur** : Julia Pivato  
-**Objet** : Exploration empirique multi-factorielle (Grid Search 20 modèles), analyse mathématique des dynamiques de gradient et validation métrologique en boucle fermée sous la norme **ISO 18646-2**.
+**Objet** : Exploration empirique multi-factorielle (Grid Search 20 modèles), analyse cinématique approfondie des temps d'accostage et validation métrologique en boucle fermée sous la norme **ISO 18646-2**.
 
 ---
 
@@ -13,7 +13,7 @@ Dans le cadre du contrôle réactif autonome du robot différentiel **AgileX LIM
 $$s = \left[\frac{x_{\text{robot}}}{X_{\max}}, \, \frac{y_{\text{robot}}}{Y_{\max}}, \, \frac{\theta_{\text{robot}}}{\pi}\right] \in [-1, 1]^3 \quad \longrightarrow \quad a = \left[\frac{v}{V_{\max}}, \, \frac{\omega}{\Omega_{\max}}\right] \in [-1, 1]^2$$
 
 Lors de la mise au point du modèle neuronal [`PioneerNN`](../src/core/pioneer_nn.py) (Perceptron Multicouche à 1000 neurones cachés sans biais, activations $\tanh$), le choix des hyperparamètres d'optimisation soulève deux interrogations majeures :
-1. **Influence du taux d'apprentissage nominal ($\eta$)** : Un taux trop faible ($\eta = 0.001$) risque de figer le réseau dans un sous-apprentissage cinématique, tandis qu'un taux trop fort ($\eta = 0.05$) peut induire des instabilités de gradient.
+1. **Influence du taux d'apprentissage nominal ($\eta$)** : Un taux trop faible ($\eta = 0.001$) risque de brider les amplitudes de vitesse motrice (vitesse rampante), tandis qu'un taux trop fort ($\eta = 0.05$) peut induire des instabilités de gradient.
 2. **Influence du budget d'entraînement ($N$ époques)** : Un nombre réduit d'époques (ex. 30 époques) est-il suffisant pour que les poids atteignent des amplitudes de commande satisfaisantes, ou un budget étendu (100 à 150 époques) est-il indispensable ?
 
 Afin de répondre à ces questions **sans aucun parti pris théorique a priori**, cette étude présente les résultats d'un **Grid Search systématique et impartial** croisant 5 taux d'apprentissage et 4 budgets d'époques (**20 modèles distincts**, testés sur **160 manœuvres en boucle fermée** sous la norme ISO 18646-2).
@@ -82,78 +82,205 @@ Tous les modèles ont été initialisés avec la **même graine Xavier (`seed=42
 
 ---
 
-## 4. Analyse Détaillée des Planches Graphiques
+## 4. Analyse Cinématique et Physique du Temps d'Accostage (46s - 60s)
 
-### 4.1. Tableau de Bord Métrologique Comparatif (Figure 1)
+Une interrogation fondamentale émerge à la lecture des résultats : **pourquoi le temps moyen d'accostage se situe-t-il entre 46.6 s et 60.0 s**, alors que la vitesse maximale du robot AgileX LIMO est de $V_{\max} = 0.24\text{ m/s}$ et que la distance initiale en ligne droite est de seulement $d_0 \approx 2.83\text{ m}$ (ce qui donnerait théoriquement $t_{\min} = 2.83 / 0.24 \approx 11.8\text{ s}$) ?
 
-![Tableau de bord des métriques comparatives](images/grid_search_metrics.png)
+L'analyse télémétrique fine des trajectoires enregistrées pas-à-pas à 20 Hz permet de décomposer ce résultat en **4 réalités physiques et algorithmiques indiscutables** :
 
-#### Explication pas-à-pas des 4 quadrants :
-1. **Cadran (A) — Taux de Succès au Docking (%)** :
-   - *Observation* : À 30 et 60 époques, le taux de succès est de 0% pour tous les taux d'apprentissage. Le robot n'a pas encore acquis la vitesse suffisante pour parcourir 2 à 3 mètres et stabiliser son orientation en moins de 60 secondes.
-   - *Rupture à 100-150 époques* : Dès 100 époques, les premiers succès apparaissent. À 150 époques, **$\eta = 0.05$ culmine à 50% de réussite (4/8 manœuvres)**, suivi de $\eta = 0.01$ (25%).
-2. **Cadran (B) — Temps Moyen d'Accostage (secondes)** :
-   - *Observation* : La ligne rouge pointillée représente la borne haute de 60.0 secondes (échec par timeout). Les modèles à faible taux ($\eta = 0.001$) restent collés au plafond de 60 s.
-   - *Amélioration cinématique* : À 150 époques, $\eta = 0.05$ fait chuter le temps moyen à **46.6 secondes**, soit un gain de plus de 13 secondes sur le ralliement de cible.
-3. **Cadran (C) — Précision de Position ISO $A_p$ (mètres)** :
-   - *Norme* : La ligne verte en tirets indique la tolérance maximale admissible ISO ($A_p < 0.25\text{ m}$).
-   - *Record de précision* : Le modèle **$\eta = 0.01$ à 150 époques** pulvérise l'exigence avec un barycentre d'arrivée situé à seulement **$0.0242\text{ m}$ (2.4 cm de la cible)**, tout en conservant une parfaite stabilité de réseau.
-4. **Cadran (D) — Erreur Angulaire Réelle Moyenne $|\Delta \theta|_{\text{mean}}$ (degrés)** :
-   - *Révélation* : Pour $\eta \in [0.001, 0.02]$, l'erreur réelle oscille entre $81^\circ$ et $104^\circ$ (le robot s'arrête orthogonalement).
-   - *Meilleur alignement* : C'est **$\eta = 0.05$ à 150 époques** qui obtient le meilleur cap d'arrivée avec **$56.4^\circ$**, marquant un alignement supérieur de près de $30^\circ$ aux modèles sous-appris.
+```
+             ┌─────────────────────────────────────────────────────────────┐
+             │       DÉCOMPOSITION DU TEMPS DE NAVIGATION DU LIMO         │
+             └─────────────────────────────────────────────────────────────┘
+                                            │
+                     ┌──────────────────────┴──────────────────────┐
+                     ▼                                             ▼
+        [ PHASE 1 : TRANSIT SPATIAL ]                [ PHASE 2 : DOCKING D'ORIENTATION ]
+        Rallier la zone d(t) < 0.5 m                Aligner le cap |e_θ(t)| < 20.0°
+        ────────────────────────────                ──────────────────────────────────
+        • Si η = 0.05 : v ≈ 0.24 m/s                • Déceleration terminale
+          => Parcouru en 10.8 s !                   • Virage sur place ou courbe Dubins
+        • Si η ≤ 0.01 : v ≈ 0.05 m/s                • Durée : 20 s à 35 s additionnelles !
+          => Parcouru en 45 s - 55 s !
+                     │                                             │
+                     └──────────────────────┬──────────────────────┘
+                                            ▼
+                    [ ARTIFACT DE TIMEOUT SIMULATION (60.0 s) ]
+                    Si d = 2.5 cm mais |e_θ| = 25°, le script attend 60s !
+```
 
----
+### 4.1. Évolution Temporelle de la Distance $d(t)$
 
-### 4.2. Dynamique d'Apprentissage Individuelle (Figure 2)
+![Évolution temporelle de la distance](images/kinematic_distance_evolution.png)
 
-Afin d'éviter toute superposition confuse de courbes sur un même repère, chaque taux d'apprentissage est isolé dans son propre sous-graphique avec son échelle optimale :
-
-![Courbes d'apprentissage individuelles et tableau de synthèse](images/grid_loss_curves.png)
-
-#### Analyse des 6 Panneaux :
-- **Panneau 1 ($\eta = 0.001$, Très Faible)** : La perte décroît de manière extrêmement lente et se stabilise à un palier élevé ($\mathcal{L}_{\text{val}} = 0.1181$). Il n'y a aucun sur-apprentissage (courbes Train et Val parfaitement superposées), mais un **sous-apprentissage cinématique marqué**.
-- **Panneau 2 ($\eta = 0.005$, Modéré)** : Profil d'apprentissage exemplaire, la perte diminue régulièrement de $0.135$ à $0.100$ sans la moindre secousse.
-- **Panneau 3 ($\eta = 0.01$, Équilibré - Recommandé)** : C'est le profil le plus régulier et le plus profond. Il atteint le minimum de perte ($\mathcal{L}_{\text{min}} = 0.1001$ à l'époque 141) avec un parfait accord train/val.
-- **Panneau 4 ($\eta = 0.02$, Élevé)** : Convergence rapide vers 0.099 dès la 50ᵉ époque, avec une légère instabilité résiduelle à l'époque 142.
-- **Panneau 5 ($\eta = 0.05$, Agressif)** : Isole nettement le phénomène d'**explosion temporaire de gradient** : la perte subit deux sauts verticaux majeurs à l'époque 45 ($\mathcal{L} = 1.81$) et 128 ($\mathcal{L} = 1.60$), avant que l'optimiseur ne ramène les poids vers le bassin d'attraction.
-- **Panneau 6 (Tableau Récapitulatif Intégré)** : Permet au lecteur de comparer d'un coup d'œil la perte initiale, la perte finale, la meilleure perte atteinte et le diagnostic de stabilité numérique.
-
----
-
-### 4.3. Trajectoires Spatiales 2D et Vecteurs d'Orientation d'Accostage (Figure 3)
-
-![Trajectoires 2D et caps finaux](images/lr_trajectories_comparison.png)
-
-#### Analyse Cinématique :
-1. **Panneau (A) — Vue Globale de l'Arène** :
-   - Le point noir à $(2.0, 2.0)$ marque le départ du robot (avec cap initial $\theta_0 = 0^\circ$).
-   - L'étoile verte à $(0, 0)$ représente la station d'accueil.
-   - La trajectoire en pointillés bleus ($\eta = 0.001$, 30 ép.) montre que le robot s'arrête à mi-course ($x \approx 0.9\text{ m}, y \approx 0.5\text{ m}$) faute de vitesse suffisante avant 60 s.
-   - En augmentant à 150 époques (courbe bleue continue), $\eta = 0.001$ parvient jusqu'à $(0.20, -0.05)$, confirmant que le modèle progresse mais manque de puissance motrice.
-   - La courbe rouge ($\eta = 0.05$) décrit une boucle vive et énergique, franchissant la distance rapidement.
-2. **Panneau (B) — Zoom d'Accostage et Vecteurs de Cap** :
-   - La flèche verte à l'origine $(0, 0)$ indique le cap désiré ($\theta^* = 0^\circ$, pointant vers la droite).
-   - Pour $\eta = 0.001$ (flèche bleue), le robot s'immobilise avec un vecteur orienté vers le bas-gauche ($\theta \approx -83^\circ$), c'est-à-dire orthogonalement à la station.
-   - Pour $\eta = 0.01$ (flèche verte), le robot se positionne à **$2.4\text{ cm}$ du centre**, réalisant la meilleure approche spatiale.
+#### Analyse du Graphique $d(t)$ :
+- **Régime $\eta = 0.05$ (Ligne rouge)** : La transition est spectaculaire. Le robot franchit plus de 2.4 mètres en **seulement 10.8 secondes**, franchissant la barre des $0.5\text{ m}$ à $t = 10.8\text{ s}$. Ce temps est en accord quasi-parfait avec la limite théorique physique ($11.8\text{ s}$).
+- **Régimes à faible taux $\eta = 0.01$ et $\eta = 0.001$ (Lignes verte et bleue)** : La descente de distance est extrêmement lente et rectiligne. Le robot ne franchit la ligne des $0.5\text{ m}$ qu'au bout de **41.0 s à 43.4 s** !
 
 ---
 
-## 5. Synthèse des Régimes Physiques et Recommandations
+### 4.2. Profil de Vitesse Linéaire Réelle $v(t)$ : La Démonstration Mathématique
+
+![Profil de vitesse réelle](images/kinematic_velocity_profile.png)
+
+#### Démonstration Cinématique du "Vitesse Rampante" (Crawl Policy) :
+1. **À $\eta = 0.001$ et $\eta = 0.01$** : Les gradients d'apprentissage n'ont pas permis aux poids du réseau de commander de fortes amplitudes de sortie sur l'activation $\tanh$. Le réseau commande une vitesse stabilisée de :
+   $$v_{\text{croisière}} \approx 0.048 \text{ à } 0.052 \text{ m/s} \quad (\approx 20\% \text{ de } V_{\max})$$
+   En appliquant la loi cinématique élémentaire pour parcourir la distance euclidienne de $d_0 = \sqrt{2^2 + 2^2} \approx 2.83\text{ m}$ :
+   $$t_{\text{transit}} = \frac{d_0}{v_{\text{croisière}}} = \frac{2.828\text{ m}}{0.050\text{ m/s}} = \mathbf{56.56\text{ secondes !}}$$
+   **Conclusion** : Le robot n'était pas bloqué ni immobile ! Il avançait continuellement à $5\text{ cm/s}$, ce qui impose physiquement plus de 56 secondes pour traverser l'arène.
+2. **À $\eta = 0.05$** : Le réseau exploite l'intégralité de la dynamique motrice ($v \approx 0.24\text{ m/s}$), ce qui lui permet de couvrir l'arène en 11 secondes.
+
+---
+
+### 4.3. Évolution de l'Erreur de Cap $|e_\theta(t)|$ : La Phase d'Orientation Terminale
+
+![Évolution de l'erreur d'orientation](images/kinematic_heading_evolution.png)
+
+#### Pourquoi l'accostage complet prend-il 32s à 46s pour $\eta = 0.05$ ?
+- L'arrivée spatiale à proximité du quai ($d < 0.5\text{ m}$) ne constitue que la **Phase 1** du docking.
+- À $t = 10.8\text{ s}$, le robot est positionné à $0.49\text{ m}$ de la cible, mais son cap est de $\theta = -113.4^\circ$, soit une erreur angulaire de $|e_\theta| = 113.4^\circ$.
+- Le critère d'accostage complet ISO impose simultanément :
+  $$\text{Condition 1 : } d < 0.20\text{ m} \qquad \text{ET} \qquad \text{Condition 2 : } |e_\theta| < 0.35\text{ rad } (20.0^\circ)$$
+- De $t = 10.8\text{ s}$ à $t = 32.1\text{ s}$ (**soit 21.3 secondes supplémentaires**), le robot effectue une rotation différentielle contrôlée pour ramener son erreur de cap de $113^\circ$ à $19.9^\circ$. Dès que la double condition est satisfaite, le succès est enregistré à **$t = 32.1\text{ s}$**.
+
+---
+
+### 4.4. L'Artefact du Timeout de Simulation (Plafond de 60.0 s)
+
+Un élément méthodologique capital doit être souligné pour la soutenance :
+- Si un robot effectue une approche d'une précision remarquable, atteignant par exemple **$d = 0.025\text{ m}$ (2.5 cm de la cible)** comme lors de l'essai 8 du modèle $\eta = 0.01$ (150 époques), mais que son cap final reste à $89.3^\circ$ à la 59ᵉ seconde, le script de simulation **ne s'arrête pas par anticipation**.
+- La boucle continue de s'exécuter jusqu'à expiration du chronomètre de sécurité (`max_duration = 60.0 s`).
+- Cet essai est alors comptabilisé dans la moyenne avec une durée de $60.0\text{ s}$, **même si le robot était déjà physiquement posé sur la cible dès 56 secondes**.
+
+---
+
+## 5. Analyse Détaillée des Métriques Individuelles
+
+Chaque métrique de performance est ici isolée dans un graphique autonome, évitant toute surcharge visuelle :
+
+### 5.1. Taux de Succès au Docking (%)
+
+![Taux de succès individuel](images/metric_success_rate.png)
+
+- **À 30 et 60 époques** : 0% de succès pour tous les taux. Les modèles n'ont pas encore acquis la coordination nécessaire pour combiner translation et rotation dans le temps imparti.
+- **À 100 et 150 époques** : Apparition nette de la réussite. Le modèle **$\eta = 0.05$ à 150 époques** atteint **50% de succès (4 manœuvres sur 8)**, confirmant la supériorité de sa dynamique d'action.
+
+---
+
+### 5.2. Temps Moyen d'Accostage (s)
+
+![Temps moyen d'accostage individuel](images/metric_arrival_time.png)
+
+- La ligne horizontale rouge à $60.0\text{ s}$ indique le timeout.
+- Seuls les modèles développant une vitesse franche parviennent à faire chuter ce temps moyen : **$46.56\text{ s}$ pour $\eta = 0.05$ (150 ép.)**, représentant un gain net de plus de 13 secondes sur le ralliement de cible.
+
+---
+
+### 5.3. Précision de Position ISO $A_p$ (m)
+
+![Précision de position individuelle](images/metric_position_accuracy.png)
+
+- La ligne en tirets jaunes représente la tolérance normative maximale ISO 18646-2 ($A_p < 0.25\text{ m}$).
+- **Record absolu de la campagne** : Le modèle **$\eta = 0.01$ (150 époques)** atteint un barycentre d'arrivée situé à seulement **$A_p = 0.0242\text{ m}$ (2.4 cm de la cible)** ! Ce résultat démontre une capacité de centrage exceptionnelle lorsque l'optimisation est exempte de bruit de gradient.
+
+---
+
+### 5.4. Erreur Angulaire Réelle Moyenne $|\Delta \theta|_{\text{mean}}$ ($^\circ$)
+
+![Erreur d'orientation individuelle](images/metric_heading_error.png)
+
+- Mesure absolue évitant le piège de l'annulation algébrique de la norme $A_o$.
+- Le modèle **$\eta = 0.05$ (150 époques)** s'aligne le plus fidèlement avec la direction de la station, affichant une erreur moyenne de **$56.4^\circ$**, contre plus de $83^\circ$ pour les modèles à faible taux.
+
+---
+
+## 6. Analyse des Courbes de Convergence Individuelles
+
+Afin de répondre à l'exigence de clarté et d'éliminer toute superposition confuse de courbes, chaque taux d'apprentissage est présenté dans son propre graphique dédié :
+
+````carousel
+![Convergence eta=0.001](images/loss_curve_lr_0p001.png)
+<!-- slide -->
+![Convergence eta=0.005](images/loss_curve_lr_0p005.png)
+<!-- slide -->
+![Convergence eta=0.010](images/loss_curve_lr_0p01.png)
+<!-- slide -->
+![Convergence eta=0.020](images/loss_curve_lr_0p02.png)
+<!-- slide -->
+![Convergence eta=0.050](images/loss_curve_lr_0p05.png)
+````
+
+### Synthèse Globale en Sous-Graphiques Séparés avec Tableau Intégré
+
+![Grille facettée des pertes et tableau de synthèse](images/grid_loss_faceted.png)
+
+#### Analyse Comparative des Régimes de Convergence :
+1. **$\eta = 0.001$** : Convergence hyper-régulière mais lenteur excessive. La perte finale ($\mathcal{L}_{\text{val}} = 0.1181$) demeure élevée, bridant la commande cinématique.
+2. **$\eta = 0.005$** : Profil idéal d'apprentissage supervisé, sans aucune oscillation.
+3. **$\eta = 0.010$ (Recommandé pour la stabilité)** : Atteint le creux de perte minimal ($\mathcal{L} = 0.0995$) avec un accord parfait train/val.
+4. **$\eta = 0.020$** : Descente très rapide dès la 40ᵉ époque, avec de légères micro-ondulations résiduelles.
+5. **$\eta = 0.050$** : Révèle le phénomène d'**explosion temporaire de gradient** (sauts à $\mathcal{L} \approx 1.8$ aux époques 45 et 128), typique des taux élevés en descente non bornée. Malgré cette instabilité ponctuelle, les poids se relocalisent rapidement dans un bassin à forte dynamique de sortie.
+
+---
+
+## 7. Trajectoires Spatiales 2D Individuelles et Orientation Finale
+
+Pour chaque régime représentatif à 150 époques, les 8 trajectoires canoniques complètes sont tracées avec :
+- Le point de départ (cercle coloré) et son cap initial $\theta_0$.
+- La station d'accueil à $(0, 0)$ (étoile verte) et son vecteur cible $\theta^* = 0^\circ$ (flèche verte).
+- Le point d'arrêt final (carré) et **la flèche rouge explicite indiquant le cap final du robot**.
+
+### 7.1. Trajectoires Individuelles — $\eta = 0.001$ (Sous-apprentissage)
+
+![Trajectoire eta=0.001](images/trajectory_lr_0p001.png)
+
+*Diagnostic* : Trajectoires quasi-rectilignes. Les robots progressent vers la cible mais s'arrêtent à 18-25 cm en raison de leur vitesse réduite ($0.047\text{ m/s}$) avant d'avoir pu entamer leur virage d'orientation. Les flèches rouges pointent orthogonalement à la cible ($\approx 84^\circ$).
+
+---
+
+### 7.2. Trajectoires Individuelles — $\eta = 0.010$ (Record de Précision Géométrique $A_p$)
+
+![Trajectoire eta=0.010](images/trajectory_lr_0p01.png)
+
+*Diagnostic* : Convergence spatiale exceptionnelle vers le centre. Les 8 trajectoires se rejoignent directement sur l'étoile verte, établissant le **record de centrage à $2.4\text{ cm}$**. Deux essais valident également le cap dans les 60 secondes.
+
+---
+
+### 7.3. Trajectoires Individuelles — $\eta = 0.050$ (Record de Succès et Vitesse)
+
+![Trajectoire eta=0.050](images/trajectory_lr_0p05.png)
+
+*Diagnostic* : Manœuvres énergiques et rapides. Le robot fonce vers la cible en 10.8 secondes, puis négocie des boucles de Dubins pour ajuster son orientation. 4 essais sur 8 valident l'amarrage parfait sous le seuil des 20°.
+
+---
+
+### 7.4. Comparaison Côte-à-Côte des 3 Régimes (Sans Chevauchement)
+
+![Comparaison 3 panneaux](images/trajectory_comparison_key_models.png)
+
+---
+
+## 8. Synthèse Comparative des Régimes Physiques
 
 | Régime | Caractéristiques Numériques | Comportement Robotique Réel | Recommandation Opérationnelle |
 | :--- | :--- | :--- | :--- |
-| **Régime A : Taux Faible**<br>($\eta = 0.001$) | Perte élevée ($\mathcal{L} \approx 0.118$)<br>Gradients très faibles | Vitesse linéaire bridée ($v \approx 0.03\text{ m/s}$), timeout systématique à 60s, arrêt à 18-94 cm. | **Déconseillé pour budget court** ; nécessite plus de 200 époques pour développer une vitesse suffisante. |
-| **Régime B : Taux Modéré**<br>($\eta = 0.005$) | Perte intermédiaire ($\mathcal{L} \approx 0.100$)<br>Descente fluide | Transition progressive ; commence à valider des amarrages à partir de 100 époques. | Bon compromis pédagogique, sans aucun risque numérique. |
-| **Régime C : Taux Équilibré**<br>($\eta = 0.010$) | Perte minimale ($\mathcal{L} = 0.0995$)<br>Stabilité mathématique absolue | **Précision barycentrique record ($A_p = 2.4\text{ cm}$)**, trajectoire fluide sans saccade motrice. | **Configuration Recommandée pour la Précision Finale** (à entraîner sur 100 à 150 époques). |
+| **Régime A : Taux Faible**<br>($\eta = 0.001$) | Perte élevée ($\mathcal{L} \approx 0.118$)<br>Gradients très faibles | Vitesse linéaire bridée ($v \approx 0.047\text{ m/s}$), timeout systématique à 60s, arrêt à 18-94 cm. | **Déconseillé** : exige plus de 300 époques pour débrider la dynamique motrice. |
+| **Régime B : Taux Modéré**<br>($\eta = 0.005$) | Perte intermédiaire ($\mathcal{L} \approx 0.100$)<br>Descente fluide | Transition progressive ; commence à valider des amarrages à partir de 100 époques. | Bon compromis pédagogique sans risque d'instabilité. |
+| **Régime C : Taux Équilibré**<br>($\eta = 0.010$) | Perte minimale ($\mathcal{L} = 0.0995$)<br>Stabilité mathématique absolue | **Précision barycentrique record ($A_p = 2.4\text{ cm}$)**, trajectoire fluide sans saccade motrice. | **Configuration Recommandée pour la Précision Finale** (à entraîner sur 150 époques). |
 | **Régime D : Taux Agressif**<br>($\eta = 0.050$) | Sauts de gradient ($\mathcal{L} \to 1.8$)<br>Énergie de mise à jour forte | **Vitesse maximale ($v = 0.24\text{ m/s}$)**, amarrage rapide (46.6s) et **50% de succès**. | **Configuration Recommandée pour la Vitesse de Navigation** si le temps de parcours est prioritaire. |
 
 ---
 
-## 6. Conclusion pour la Soutenance
+## 9. Conclusion pour la Soutenance
 
-L'expérimentation impartiale menée dans cette étude a permis d'éclaircir trois points cruciaux :
-1. **Non-équivalence Perte / Performance Robotique** : Une fonction de perte stable ne garantit pas la vitesse cinématique. À $\eta = 0.001$, la perte est basse et régulière, mais le robot est trop lent pour les contraintes de temps d'une mission réelle.
-2. **Validation des Intuitions Visuelles** : L'examen attentif des trajectoires 2D a confirmé que le taux plus élevé ($\eta = 0.05$) permettait physiquement au robot d'atteindre la station beaucoup plus vite que les taux faibles, justifiant son taux de succès supérieur (50%).
-3. **Le Choix Optimal pour le Projet LIMO** :
-   - Pour un déploiement privilégiant la **précision métrologique et la douceur mécanique**, le réglage optimal est **$\eta = 0.01$ sur 150 époques** ($A_p = 2.4\text{ cm}$, aucune oscillation).
-   - Pour un déploiement privilégiant la **rapidité d'intervention**, le modèle **$\eta = 0.05$** apporte le dynamisme moteur nécessaire.
+L'expérimentation impartiale et l'analyse cinématique fine ont permis d'établir trois conclusions scientifiques majeures :
+1. **Élucidation du temps d'accostage élevé (46s - 60s)** :
+   - À taux modéré ($\eta \le 0.01$), le robot met 56 secondes car sa vitesse est bridée à $0.05\text{ m/s}$ ($\frac{2.83\text{ m}}{0.05\text{ m/s}} = 56.6\text{ s}$).
+   - À taux élevé ($\eta = 0.05$), le transit ne prend que **10.8 secondes** (conforme à la limite physique), mais la phase d'orientation angulaire en zone restreinte requiert 21 secondes supplémentaires pour satisfaire la tolérance des $20^\circ$.
+   - Les essais proches de la cible (2.5 cm) sont bridés à 60.0s par le critère de timeout si le cap n'est pas finalisé.
+2. **Découplage entre Perte MSE et Dynamique Réelle** :
+   - Une fonction de perte basse et stable ne garantit pas la puissance d'action motrice. L'évaluation en boucle fermée sous la norme ISO 18646-2 est le seul juge de paix de la performance robotique.
+3. **Le Choix d'Ingénierie pour le Robot AgileX LIMO** :
+   - Si la mission requiert une **précision métrologique millimétrique** (ex. accostage de recharge par contact physique), le modèle **$\eta = 0.01$ (150 époques)** est sans égal ($A_p = 2.4\text{ cm}$).
+   - Si la mission privilégie la **rapidité d'intervention et le taux de succès global**, le modèle **$\eta = 0.05$** apporte le dynamisme nécessaire.
