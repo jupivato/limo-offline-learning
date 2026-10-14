@@ -10,8 +10,8 @@ Features:
   2. Vectorized NumPy (high-speed fallback if PyTorch has driver/ABI mismatch)
   3. Pure Python standard library (guaranteed zero-dependency fallback)
 - Robot-centric normalized inputs in [-1.0, 1.0] and ternary targets in {-1.0, 0.0, 1.0}.
-- AdamW optimizer with weight decay, learning rate scheduling on plateau.
-- Early Stopping (15 epochs patience) to prevent overfitting.
+- Pure Constant SGD optimizer (strictly constant learning rate, zero momentum, zero weight decay).
+- Default 150 epochs at learning rate 0.001.
 - Canonical JSON weight export (PioneerNN) and training history logging.
 
 Project: LIMO Offline Learning (CERV / ENIB)
@@ -34,30 +34,15 @@ _project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
-# Auto-detect and add all local Python site-packages directories (including Python 3.10, 3.12, 3.14)
-_user_home = os.path.expanduser("~")
-_real_user_home = os.environ.get("SNAP_REAL_HOME", "/home/juliapivato")
-
-for _h in [_user_home, _real_user_home, "/home/juliapivato"]:
-    for _ver in ["3.10", "3.11", "3.12", "3.14"]:
-        for _sub in ["site-packages", "dist-packages"]:
-            for _prefix in [".local/lib", "local/lib", "snap/antigravity-cli/common/local/lib"]:
-                _d = os.path.join(_h, _prefix, f"python{_ver}", _sub)
-                if os.path.exists(_d) and _d not in sys.path:
-                    sys.path.insert(0, _d)
-
-# Add NVIDIA CUDA shared library directories if present
-for _nvidia_base in [
-    "/home/juliapivato/.local/lib/python3.10/site-packages/nvidia",
-    os.path.join(_user_home, ".local", "lib", "python3.10", "site-packages", "nvidia"),
+# Auto-detect and add snap/local packages
+for _p in [
+    "/home/juliapivato/snap/antigravity-cli/common/local/lib/python3.14/dist-packages",
+    "/home/juliapivato/snap/antigravity-cli/common/local/lib/python3.12/dist-packages",
+    os.path.expanduser("~/local/lib/python3.14/dist-packages"),
+    os.path.expanduser("~/local/lib/python3.12/dist-packages"),
 ]:
-    if os.path.exists(_nvidia_base):
-        for _sub in ["cu13/lib", "cudnn/lib", "nccl/lib", "cusparselt/lib", "nvshmem/lib"]:
-            _lib_dir = os.path.join(_nvidia_base, _sub)
-            if os.path.exists(_lib_dir):
-                _cur_ld = os.environ.get("LD_LIBRARY_PATH", "")
-                if _lib_dir not in _cur_ld:
-                    os.environ["LD_LIBRARY_PATH"] = f"{_lib_dir}:{_cur_ld}" if _cur_ld else _lib_dir
+    if os.path.exists(_p) and _p not in sys.path:
+        sys.path.insert(0, _p)
 
 _TORCH_IMPORT_ERROR: Optional[str] = None
 try:
@@ -174,15 +159,15 @@ def train_offline_torch(
     dataset_path: str,
     weights_output_path: str,
     history_output_path: str,
-    epochs: int = 100,
-    batch_size: int = 128,
+    epochs: int = 150,
+    batch_size: int = 256,
     learning_rate: float = 0.001,
     beta: float = 1.0,
-    patience: int = 15,
+    patience: int = 150,
     use_bias: bool = False,
     hidden_size: int = 1000
 ) -> Dict[str, Any]:
-    """Executes offline training using PyTorch."""
+    """Executes offline training using PyTorch with pure constant SGD."""
     print("Moteur de calcul     : PyTorch (Accélération tensorielle)")
     full_dataset = DemonstrationDataset(dataset_path)
     total_len = len(full_dataset)
@@ -206,10 +191,8 @@ def train_offline_torch(
     model.to(device)
 
     criterion = WeightedMSELoss(beta=beta)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=1e-4)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode="min", factor=0.5, patience=5, min_lr=1e-6
-    )
+    # PURE CONSTANT SGD: zero momentum, zero weight decay, strictly constant learning rate
+    optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate, momentum=0.0, weight_decay=0.0)
 
     history = {
         "epochs": [],
@@ -264,8 +247,6 @@ def train_offline_torch(
         if epoch % 5 == 0 or epoch == 1 or epoch == epochs:
             print(f"Époque {epoch:3d}/{epochs} | Loss Train: {avg_train_loss:.6f} | Loss Val: {avg_val_loss:.6f} | LR: {current_lr:.6f}")
 
-        scheduler.step(avg_val_loss)
-
         if avg_val_loss < best_val_loss - 1e-5:
             best_val_loss = avg_val_loss
             epochs_no_improve = 0
@@ -289,15 +270,15 @@ def train_offline_numpy(
     dataset_path: str,
     weights_output_path: str,
     history_output_path: str,
-    epochs: int = 100,
-    batch_size: int = 1024,
+    epochs: int = 150,
+    batch_size: int = 256,
     learning_rate: float = 0.001,
     beta: float = 1.0,
-    patience: int = 15,
+    patience: int = 150,
     hidden_size: int = 1000
 ) -> Dict[str, Any]:
-    """Executes offline training using vectorized NumPy engine."""
-    print("Moteur de calcul     : NumPy Vectorisé (Repli autonome haute vitesse)")
+    """Executes offline training using vectorized NumPy engine with pure constant SGD."""
+    print("Moteur de calcul     : NumPy Vectorisé (SGD Pur à Taux Constant)")
     inputs, targets = load_dataset_samples(dataset_path)
 
     X = np.array(inputs, dtype=np.float32)
@@ -324,11 +305,6 @@ def train_offline_numpy(
     limit2 = math.sqrt(6.0 / (hidden_size + 2))
     W2 = np.random.uniform(-limit2, limit2, (hidden_size, 2)).astype(np.float32)
 
-    # AdamW state
-    mW1, vW1 = np.zeros_like(W1), np.zeros_like(W1)
-    mW2, vW2 = np.zeros_like(W2), np.zeros_like(W2)
-    beta1, beta2, eps, wd = 0.9, 0.999, 1e-8, 1e-4
-
     history = {
         "epochs": [],
         "train_loss": [],
@@ -340,7 +316,6 @@ def train_offline_numpy(
     best_W1, best_W2 = W1.copy(), W2.copy()
     epochs_no_improve = 0
     lr = learning_rate
-    t = 0
     start_training_time = time.time()
 
     num_train = len(X_train)
@@ -354,7 +329,6 @@ def train_offline_numpy(
         n_batches = 0
 
         for b in range(0, num_train, batch_size):
-            t += 1
             xb = X_shuffled[b:b + batch_size]
             yb = Y_shuffled[b:b + batch_size]
             B = len(xb)
@@ -378,19 +352,9 @@ def train_offline_numpy(
             dH = np.dot(dY, W2.T) * (1.0 - H ** 2)
             dW1 = np.dot(xb.T, dH)
 
-            # AdamW update W1
-            mW1 = beta1 * mW1 + (1.0 - beta1) * dW1
-            vW1 = beta2 * vW1 + (1.0 - beta2) * (dW1 ** 2)
-            m_hat1 = mW1 / (1.0 - beta1 ** t)
-            v_hat1 = vW1 / (1.0 - beta2 ** t)
-            W1 -= lr * (m_hat1 / (np.sqrt(v_hat1) + eps) + wd * W1)
-
-            # AdamW update W2
-            mW2 = beta1 * mW2 + (1.0 - beta1) * dW2
-            vW2 = beta2 * vW2 + (1.0 - beta2) * (dW2 ** 2)
-            m_hat2 = mW2 / (1.0 - beta1 ** t)
-            v_hat2 = vW2 / (1.0 - beta2 ** t)
-            W2 -= lr * (m_hat2 / (np.sqrt(v_hat2) + eps) + wd * W2)
+            # Pure SGD update W1 & W2
+            W1 -= lr * dW1
+            W2 -= lr * dW2
 
         avg_train_loss = train_loss_acc / max(1, n_batches)
 
@@ -416,8 +380,6 @@ def train_offline_numpy(
             best_W2 = W2.copy()
         else:
             epochs_no_improve += 1
-            if epochs_no_improve % 5 == 0:
-                lr = max(1e-6, lr * 0.5)
             if epochs_no_improve >= patience:
                 print(f"\n[Early Stopping] Arrêt anticipé à l'époque {epoch} (pas de gain depuis {patience} époques).")
                 break
@@ -441,11 +403,11 @@ def train_offline_pure_python(
     dataset_path: str,
     weights_output_path: str,
     history_output_path: str,
-    epochs: int = 100,
+    epochs: int = 150,
     batch_size: int = 256,
     learning_rate: float = 0.001,
     beta: float = 1.0,
-    patience: int = 15,
+    patience: int = 150,
     hidden_size: int = 1000
 ) -> Dict[str, Any]:
     """Pure Python training engine requiring zero external libraries."""
@@ -608,22 +570,23 @@ def train_offline(
     dataset_path: str = "data/dataset.csv",
     weights_output_path: str = "models/supervised_w_torch_diff.json",
     history_output_path: str = "models/training_history.json",
-    epochs: int = 100,
-    batch_size: int = 1024,
+    epochs: int = 150,
+    batch_size: int = 256,
     learning_rate: float = 0.001,
     beta: float = 1.0,
-    patience: int = 15,
+    patience: int = 150,
     use_bias: bool = False,
     hidden_size: int = 1000
 ) -> Dict[str, Any]:
-    """Entry point for offline behavioral cloning training."""
+    """Entry point for offline behavioral cloning training (Pure Constant SGD)."""
     print("\n" + "=" * 65)
-    print("--- DÉMARRAGE DE L'ENTRAÎNEMENT HORS LIGNE (BEHAVIORAL CLONING) ---")
+    print("--- DÉMARRAGE DE L'ENTRAÎNEMENT HORS LIGNE (SGD PUR CONSTANT) ---")
     print(f"Jeu de données       : {dataset_path}")
     print(f"Poids de sortie      : {weights_output_path}")
     print(f"Époques maximales    : {epochs}")
     print(f"Taille de batch      : {batch_size}")
-    print(f"Taux d'apprentissage : {learning_rate} (AdamW)")
+    print(f"Optimiseur           : Descente de Gradient Stochastique Pure (SGD)")
+    print(f"Taux d'apprentissage : {learning_rate} (Strictement Constant)")
     print(f"Coefficient bêta     : {beta}")
     bias_str = "Activés" if use_bias else "Désactivés (v=0, w=0 strict à l'origine)"
     print(f"Biais neuronaux      : {bias_str}")
@@ -671,17 +634,17 @@ def train_offline(
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Pipeline d'entraînement hors ligne pour LIMO.")
+    parser = argparse.ArgumentParser(description="Pipeline d'entraînement hors ligne pour LIMO (SGD Pur Constant).")
     parser.add_argument("--dataset", type=str, default="data/dataset.csv", help="Chemin du dataset (défaut: data/dataset.csv)")
     parser.add_argument("--output", type=str, default="models/supervised_w_torch_diff.json", help="Chemin du modèle JSON (défaut: models/supervised_w_torch_diff.json)")
     parser.add_argument("--history", type=str, default="models/training_history.json", help="Chemin du fichier JSON d'historique (défaut: models/training_history.json)")
-    parser.add_argument("--epochs", type=int, default=100, help="Nombre d'époques")
-    parser.add_argument("--batch-size", type=int, default=1024, help="Taille de batch")
-    parser.add_argument("--lr", type=float, default=0.001, help="Taux d'apprentissage")
-    parser.add_argument("--beta", type=float, default=1.0, help="Pondération de l'erreur angulaire")
+    parser.add_argument("--epochs", type=int, default=150, help="Nombre d'époques (défaut: 150)")
+    parser.add_argument("--batch-size", type=int, default=256, help="Taille de batch (défaut: 256)")
+    parser.add_argument("--lr", type=float, default=0.001, help="Taux d'apprentissage constant (défaut: 0.001)")
+    parser.add_argument("--beta", type=float, default=1.0, help="Pondération de l'erreur angulaire (défaut: 1.0)")
     parser.add_argument("--use-bias", action="store_true", default=False, help="Active les biais neuronaux (par défaut: False)")
     parser.add_argument("--no-bias", action="store_false", dest="use_bias", help="Désactive les biais neuronaux (par défaut: désactivés)")
-    parser.add_argument("--patience", type=int, default=15, help="Seuil d'arrêt précoce en nombre d'époques (défaut: 15)")
+    parser.add_argument("--patience", type=int, default=150, help="Seuil d'arrêt précoce en nombre d'époques (défaut: 150)")
     parser.add_argument("--hidden-size", type=int, default=1000, help="Nombre de neurones dans la couche cachée (défaut: 1000)")
     args = parser.parse_args()
 

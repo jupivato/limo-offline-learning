@@ -117,7 +117,7 @@ def plot_training_history(
         # Sous-graphique 2 : Taux d'apprentissage (Learning Rate)
         ax2.set_facecolor("#fafbfc")
         ax2.grid(True, linestyle="--", alpha=0.6, color="#cbd5e1")
-        ax2.plot(epochs, lr_history, label="Taux d'Apprentissage (AdamW)", color="#9467bd", linewidth=1.8)
+        ax2.plot(epochs, lr_history, label="Taux d'Apprentissage (SGD Pur)", color="#9467bd", linewidth=1.8)
         ax2.set_yscale("log")
         ax2.set_xlabel("Époque d'Entraînement", fontsize=11, fontweight="bold")
         ax2.set_ylabel("Taux d'Apprentissage (LR)", fontsize=11, fontweight="bold")
