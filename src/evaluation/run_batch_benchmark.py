@@ -16,12 +16,15 @@ Modes d'exécution :
 Projet : LIMO Offline Learning (CERV / ENIB)
 """
 
+from __future__ import annotations
+
 import os
 import sys
 import time
 import math
 import csv
 import argparse
+from typing import List, Dict, Any, Optional, Tuple
 # Inclusion automatique du dossier racine du projet dans sys.path
 _project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if _project_root not in sys.path:
@@ -114,7 +117,7 @@ def run_simulated_benchmark_run(
     y0: float,
     th0: float,
     run_name: str,
-    target: List[float] = [0.0, 0.0, 0.0],
+    target: list[float] = [0.0, 0.0, 0.0],
     max_duration: float = 60.0,
     output_dir: str = "data/evaluation/batch_run",
     dist_tol: float = 0.20
