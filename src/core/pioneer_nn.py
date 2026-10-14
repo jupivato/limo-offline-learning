@@ -29,17 +29,15 @@ _project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
-# Auto-detect and add all local Python site-packages directories (including Python 3.10, 3.12, 3.14)
-_user_home = os.path.expanduser("~")
-_real_user_home = os.environ.get("SNAP_REAL_HOME", "/home/juliapivato")
-
-for _h in [_user_home, _real_user_home, "/home/juliapivato"]:
-    for _ver in ["3.10", "3.11", "3.12", "3.14"]:
-        for _sub in ["site-packages", "dist-packages"]:
-            for _prefix in [".local/lib", "local/lib", "snap/antigravity-cli/common/local/lib"]:
-                _d = os.path.join(_h, _prefix, f"python{_ver}", _sub)
-                if os.path.exists(_d) and _d not in sys.path:
-                    sys.path.insert(0, _d)
+# Auto-detect and prioritize working snap/local packages
+for _p in [
+    "/home/juliapivato/snap/antigravity-cli/common/local/lib/python3.14/dist-packages",
+    "/home/juliapivato/snap/antigravity-cli/common/local/lib/python3.12/dist-packages",
+    os.path.expanduser("~/local/lib/python3.14/dist-packages"),
+    os.path.expanduser("~/local/lib/python3.12/dist-packages"),
+]:
+    if os.path.exists(_p) and _p not in sys.path:
+        sys.path.insert(0, _p)
 
 try:
     import torch
