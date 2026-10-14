@@ -53,12 +53,14 @@ from src.core.pioneer_nn import PioneerNN
 # ==============================================================================
 # ⚙️ CONFIGURAÇÕES GLOBAIS DE TREINAMENTO (MODIFIQUE DIRETAMENTE AQUI)
 # ==============================================================================
-EPOCHS = 100              # Número total de épocas de treinamento
-LEARNING_RATE = 0.5       # Taxa de aprendizado constante (SGD Puro, sem scheduler)
-BATCH_SIZE = 1          # Tamanho do mini-lote (batch)
+USE_ADAMW = False          # False = SGD Puro (taxa constante) | True = AdamW (otimizador adaptativo com weight decay)
+WEIGHT_DECAY = 1e-4        # Penalidade L2 / Decaimento de pesos (usado quando USE_ADAMW = True)
+EPOCHS = 500              # Número total de épocas de treinamento
+LEARNING_RATE = 0.25       # Taxa de aprendizado constante
+BATCH_SIZE = 250          # Tamanho do mini-lote (batch)
 BETA = 1.0                # Peso da velocidade angular na perda: MSE(v) + beta * MSE(w)
-HIDDEN_SIZE = 1000        # Número de neurônios na camada oculta
-USE_BIAS = False          # False = garante velocidade 0.0 na doca (0,0,0) sem tremores
+HIDDEN_SIZE = 100         # Número de neurônios na camada oculta
+USE_BIAS = True           # False = garante velocidade 0.0 na doca (0,0,0) sem tremores
 
 DATASET_CSV = "data/dataset.csv"                         # Arquivo do dataset
 OUTPUT_WEIGHTS = "models/supervised_w_torch_diff.json"   # Onde salvar os pesos do modelo
@@ -146,10 +148,13 @@ def _train_with_torch(
     learning_rate: float,
     beta: float,
     use_bias: bool,
-    hidden_size: int
+    hidden_size: int,
+    use_adamw: bool = False,
+    weight_decay: float = 1e-4
 ) -> Dict[str, Any]:
     """Treinamento acelerado via PyTorch."""
-    print("Moteur de calcul     : PyTorch (SGD Pur a Taxa Constante)")
+    opt_label = "AdamW (Adaptativo)" if use_adamw else "SGD Puro (Taxa Constante)"
+    print(f"Moteur de calcul     : PyTorch ({opt_label})")
     X = torch.tensor(inputs, dtype=torch.float32)
     Y = torch.tensor(targets, dtype=torch.float32)
 
@@ -170,7 +175,12 @@ def _train_with_torch(
     model.to(device)
 
     criterion = WeightedMSELoss(beta=beta)
-    optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate, momentum=0.0, weight_decay=0.0)
+    if use_adamw:
+        print(f"Otimizador           : AdamW (lr={learning_rate}, weight_decay={weight_decay})")
+        optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+    else:
+        print(f"Otimizador           : SGD Puro (lr={learning_rate}, momentum=0.0, weight_decay=0.0)")
+        optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate, momentum=0.0, weight_decay=0.0)
 
     history = {"epochs": [], "train_loss": [], "val_loss": [], "learning_rate": []}
     best_val_loss = float("inf")
@@ -245,10 +255,13 @@ def _train_with_numpy(
     batch_size: int,
     learning_rate: float,
     beta: float,
-    hidden_size: int
+    hidden_size: int,
+    use_adamw: bool = False,
+    weight_decay: float = 1e-4
 ) -> Dict[str, Any]:
     """Treinamento de alta velocidade via NumPy (garantido sem erros de ABI C++)."""
-    print("Moteur de calcul     : NumPy Vectorisé (SGD Pur a Taxa Constante)")
+    opt_label = "AdamW Vectorisé" if use_adamw else "SGD Pur a Taxa Constante"
+    print(f"Moteur de calcul     : NumPy ({opt_label})")
     X = np.array(inputs, dtype=np.float32)
     Y = np.array(targets, dtype=np.float32)
 
@@ -266,6 +279,12 @@ def _train_with_numpy(
     W1 = np.random.uniform(-limit1, limit1, (3, hidden_size)).astype(np.float32)
     limit2 = math.sqrt(6.0 / (hidden_size + 2))
     W2 = np.random.uniform(-limit2, limit2, (hidden_size, 2)).astype(np.float32)
+
+    if use_adamw:
+        m_W1, v_W1 = np.zeros_like(W1), np.zeros_like(W1)
+        m_W2, v_W2 = np.zeros_like(W2), np.zeros_like(W2)
+        beta1, beta2, eps = 0.9, 0.999, 1e-8
+        t_step = 0
 
     history = {"epochs": [], "train_loss": [], "val_loss": [], "learning_rate": []}
     best_val_loss = float("inf")
@@ -302,9 +321,27 @@ def _train_with_numpy(
             dH = (dY @ W2.T) * (1.0 - H ** 2)
             dW1 = xb.T @ dH
 
-            # Atualização estrita SGD Pur
-            W1 -= learning_rate * dW1
-            W2 -= learning_rate * dW2
+            if use_adamw:
+                t_step += 1
+                # Weight decay
+                W1 -= learning_rate * weight_decay * W1
+                W2 -= learning_rate * weight_decay * W2
+
+                m_W1 = beta1 * m_W1 + (1.0 - beta1) * dW1
+                v_W1 = beta2 * v_W1 + (1.0 - beta2) * (dW1 ** 2)
+                m_hat_W1 = m_W1 / (1.0 - beta1 ** t_step)
+                v_hat_W1 = v_W1 / (1.0 - beta2 ** t_step)
+                W1 -= learning_rate * m_hat_W1 / (np.sqrt(v_hat_W1) + eps)
+
+                m_W2 = beta1 * m_W2 + (1.0 - beta1) * dW2
+                v_W2 = beta2 * v_W2 + (1.0 - beta2) * (dW2 ** 2)
+                m_hat_W2 = m_W2 / (1.0 - beta1 ** t_step)
+                v_hat_W2 = v_W2 / (1.0 - beta2 ** t_step)
+                W2 -= learning_rate * m_hat_W2 / (np.sqrt(v_hat_W2) + eps)
+            else:
+                # Atualização estrita SGD Puro
+                W1 -= learning_rate * dW1
+                W2 -= learning_rate * dW2
 
         avg_train = train_loss_acc / max(1, n_batches)
 
@@ -358,16 +395,22 @@ def train_offline(
     beta: float = BETA,
     use_bias: bool = USE_BIAS,
     hidden_size: int = HIDDEN_SIZE,
+    use_adamw: bool = USE_ADAMW,
+    weight_decay: float = WEIGHT_DECAY,
 ) -> Dict[str, Any]:
     """
-    Executa o treinamento offline completo com SGD Puro a taxa de aprendizado constante.
+    Executa o treinamento offline completo com opção de SGD Puro ou AdamW.
     """
+    opt_label = "AdamW (Adaptativo)" if use_adamw else "SGD Puro (Taxa Constante)"
     print("\n" + "=" * 68)
-    print("  TREINAMENTO OFFLINE — PIONEER NN (SGD PURO A TAXA CONSTANTE)")
+    print(f"  TREINAMENTO OFFLINE — PIONEER NN ({opt_label.upper()})")
     print("=" * 68)
+    print(f"Otimizador           : {opt_label}")
+    if use_adamw:
+        print(f"Weight Decay (L2)    : {weight_decay}")
     print(f"Dataset              : {dataset_path}")
     print(f"Épocas               : {epochs}")
-    print(f"Taxa de Aprendizado  : {learning_rate} (estritamente constante)")
+    print(f"Taxa de Aprendizado  : {learning_rate}")
     print(f"Tamanho do Batch     : {batch_size}")
     print(f"Bêta (peso angular)  : {beta}")
     print(f"Neurônios ocultos    : {hidden_size} (Tanh)")
@@ -381,12 +424,14 @@ def train_offline(
     if TORCH_AVAILABLE:
         result = _train_with_torch(
             inputs, targets, weights_output_path, history_output_path,
-            epochs, batch_size, learning_rate, beta, use_bias, hidden_size
+            epochs, batch_size, learning_rate, beta, use_bias, hidden_size,
+            use_adamw=use_adamw, weight_decay=weight_decay
         )
     elif NUMPY_AVAILABLE:
         result = _train_with_numpy(
             inputs, targets, weights_output_path, history_output_path,
-            epochs, batch_size, learning_rate, beta, hidden_size
+            epochs, batch_size, learning_rate, beta, hidden_size,
+            use_adamw=use_adamw, weight_decay=weight_decay
         )
     else:
         raise RuntimeError("Nem PyTorch nem NumPy foram encontrados. Execute: pip install numpy torch")
@@ -415,10 +460,13 @@ def train_offline(
 
 if __name__ == "__main__":
     import argparse
-    parser = argparse.ArgumentParser(description="Treinamento Offline do LIMO (PioneerNN com SGD Puro)")
+    parser = argparse.ArgumentParser(description="Treinamento Offline do LIMO (PioneerNN com SGD Puro ou AdamW)")
     parser.add_argument("--epochs", type=int, default=EPOCHS, help=f"Número de épocas (padrão: {EPOCHS})")
     parser.add_argument("--lr", type=float, default=LEARNING_RATE, help=f"Taxa de aprendizado (padrão: {LEARNING_RATE})")
     parser.add_argument("--batch-size", type=int, default=BATCH_SIZE, help=f"Tamanho do batch (padrão: {BATCH_SIZE})")
+    parser.add_argument("--adamw", action="store_true", default=USE_ADAMW, help="Ativa o otimizador AdamW (padrão configurado em USE_ADAMW)")
+    parser.add_argument("--sgd", action="store_false", dest="adamw", help="Força o uso do SGD Puro")
+    parser.add_argument("--weight-decay", type=float, default=WEIGHT_DECAY, help=f"Weight decay para AdamW (padrão: {WEIGHT_DECAY})")
     parser.add_argument("--dataset", type=str, default=DATASET_CSV, help=f"Arquivo dataset (padrão: {DATASET_CSV})")
     parser.add_argument("--output", type=str, default=OUTPUT_WEIGHTS, help=f"Onde salvar o modelo (padrão: {OUTPUT_WEIGHTS})")
     parser.add_argument("--history", type=str, default=OUTPUT_HISTORY, help=f"Onde salvar o histórico (padrão: {OUTPUT_HISTORY})")
@@ -431,4 +479,6 @@ if __name__ == "__main__":
         epochs=args.epochs,
         batch_size=args.batch_size,
         learning_rate=args.lr,
+        use_adamw=args.adamw,
+        weight_decay=args.weight_decay,
     )
