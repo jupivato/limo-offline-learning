@@ -147,11 +147,13 @@ python3 src/generate_dataset.py
 
 ### 3. Train the Bias-Free Neural Controller
 
-Trains the MLP (`3 -> 1000 -> 2`) with AdamW, early stopping, and zero bias:
+Trains the MLP (`3 -> 1000 -> 2`) using pure constant SGD (strictly constant learning rate, zero momentum, zero weight decay) for 150 epochs:
 
 ```bash
-python3 src/train_offline.py --no-bias --epochs 100 --batch-size 1024
+python3 src/train_offline.py
 ```
+
+*(For complete operational instructions, directory structures, and Gazebo tutorials, see [TUTORIAL.md](TUTORIAL.md)).*
 
 ### 4. Plot Training Convergence Curves
 
