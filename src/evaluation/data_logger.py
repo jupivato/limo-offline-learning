@@ -15,9 +15,12 @@ import math
 from typing import List, Dict, Any, Optional
 
 # Inclusion automatique du chemin dist-packages snap si présent
+_py_ver = f"{sys.version_info.major}.{sys.version_info.minor}"
 for _p in [
-    os.path.expanduser("~/local/lib/python3.14/dist-packages"),
-    os.path.expanduser("~/snap/antigravity-cli/common/local/lib/python3.14/dist-packages")
+    f"/home/juliapivato/snap/antigravity-cli/common/local/lib/python{_py_ver}/dist-packages",
+    os.path.expanduser(f"~/snap/antigravity-cli/common/local/lib/python{_py_ver}/dist-packages"),
+    os.path.expanduser(f"~/local/lib/python{_py_ver}/dist-packages"),
+    os.path.expanduser(f"~/.local/lib/python{_py_ver}/site-packages"),
 ]:
     if os.path.exists(_p) and _p not in sys.path:
         sys.path.insert(0, _p)

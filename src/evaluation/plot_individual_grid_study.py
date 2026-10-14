@@ -4,9 +4,12 @@ import json
 import csv
 import math
 
+_py_ver = f"{sys.version_info.major}.{sys.version_info.minor}"
 snap_paths = [
-    "/home/juliapivato/snap/antigravity-cli/common/local/lib/python3.14/dist-packages",
-    "/home/juliapivato/snap/antigravity-cli/common/local/lib/python3.12/dist-packages"
+    f"/home/juliapivato/snap/antigravity-cli/common/local/lib/python{_py_ver}/dist-packages",
+    os.path.expanduser(f"~/snap/antigravity-cli/common/local/lib/python{_py_ver}/dist-packages"),
+    os.path.expanduser(f"~/local/lib/python{_py_ver}/dist-packages"),
+    os.path.expanduser(f"~/.local/lib/python{_py_ver}/site-packages"),
 ]
 for p in snap_paths:
     if os.path.exists(p) and p not in sys.path:

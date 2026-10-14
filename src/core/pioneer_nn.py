@@ -29,12 +29,13 @@ _project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
-# Auto-detect and prioritize working snap/local packages
+# Auto-detect packages matching the current Python version
+_py_ver = f"{sys.version_info.major}.{sys.version_info.minor}"
 for _p in [
-    "/home/juliapivato/snap/antigravity-cli/common/local/lib/python3.14/dist-packages",
-    "/home/juliapivato/snap/antigravity-cli/common/local/lib/python3.12/dist-packages",
-    os.path.expanduser("~/local/lib/python3.14/dist-packages"),
-    os.path.expanduser("~/local/lib/python3.12/dist-packages"),
+    f"/home/juliapivato/snap/antigravity-cli/common/local/lib/python{_py_ver}/dist-packages",
+    os.path.expanduser(f"~/snap/antigravity-cli/common/local/lib/python{_py_ver}/dist-packages"),
+    os.path.expanduser(f"~/local/lib/python{_py_ver}/dist-packages"),
+    os.path.expanduser(f"~/.local/lib/python{_py_ver}/site-packages"),
 ]:
     if os.path.exists(_p) and _p not in sys.path:
         sys.path.insert(0, _p)
