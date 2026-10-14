@@ -277,9 +277,25 @@ class PioneerNN(BaseNN):
             json.dump(data, f, indent=2)
 
     def load_from_json_file(self, file_path: str) -> None:
-        """Charge les poids depuis un fichier JSON."""
-        if not os.path.exists(file_path):
+        """Charge les poids depuis un fichier JSON avec résolution automatique des chemins."""
+        resolved_path = file_path
+        if not os.path.exists(resolved_path):
+            candidates = [
+                os.path.join(_project_root, file_path),
+                os.path.join(_project_root, "models", "supervised_w_torch_diff.json"),
+                os.path.join(_project_root, "models", "pioneer_model_weights.json"),
+                os.path.join(os.path.dirname(os.path.abspath(file_path)), "supervised_w_torch_diff.json"),
+                os.path.join(os.path.dirname(os.path.abspath(file_path)), "pioneer_model_weights.json"),
+                "models/supervised_w_torch_diff.json",
+                "models/pioneer_model_weights.json",
+            ]
+            for cand in candidates:
+                if os.path.exists(cand):
+                    resolved_path = cand
+                    break
+
+        if not os.path.exists(resolved_path):
             raise FileNotFoundError(f"Fichier de poids introuvable : {file_path}")
-        with open(file_path, "r", encoding="utf-8") as f:
+        with open(resolved_path, "r", encoding="utf-8") as f:
             data = json.load(f)
         self.load_weights_from_json(data)

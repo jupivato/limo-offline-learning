@@ -392,6 +392,14 @@ def train_offline(
         raise RuntimeError("Nem PyTorch nem NumPy foram encontrados. Execute: pip install numpy torch")
 
     print(f"[Sucesso] Pesos salvos em : {weights_output_path}")
+    try:
+        alt_path = os.path.join(os.path.dirname(weights_output_path), "pioneer_model_weights.json")
+        if os.path.abspath(weights_output_path) != os.path.abspath(alt_path):
+            import shutil
+            shutil.copy2(weights_output_path, alt_path)
+            print(f"[Sucesso] Cópia sincronizada em: {alt_path}")
+    except Exception:
+        pass
     print(f"[Sucesso] Histórico salvo em : {history_output_path}")
 
     # Gerar automaticamente a curva de convergência
