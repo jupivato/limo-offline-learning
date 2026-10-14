@@ -27,16 +27,27 @@ _project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
+# Inclusion automatique du chemin dist-packages si present pour la version Python courante
+_py_ver = f"{sys.version_info.major}.{sys.version_info.minor}"
+for _p in [
+    f"/home/juliapivato/snap/antigravity-cli/common/local/lib/python{_py_ver}/dist-packages",
+    os.path.expanduser(f"~/snap/antigravity-cli/common/local/lib/python{_py_ver}/dist-packages"),
+    os.path.expanduser(f"~/local/lib/python{_py_ver}/dist-packages"),
+    os.path.expanduser(f"~/.local/lib/python{_py_ver}/site-packages"),
+]:
+    if os.path.exists(_p) and _p not in sys.path:
+        sys.path.insert(0, _p)
+
 try:
     import torch
     TORCH_AVAILABLE = True
-except ImportError:
+except (ImportError, OSError):
     TORCH_AVAILABLE = False
 
 try:
     import rclpy
     ROS2_AVAILABLE = True
-except ImportError:
+except (ImportError, ModuleNotFoundError):
     ROS2_AVAILABLE = False
 
 from src.core.pioneer_nn import PioneerNN
@@ -82,8 +93,6 @@ def run_autonomous_session(
     """
     if not ROS2_AVAILABLE:
         raise RuntimeError("ROS 2 n'est pas disponible dans cet environnement.")
-    if not TORCH_AVAILABLE:
-        raise RuntimeError("PyTorch n'est pas installé dans cet environnement.")
 
     print("\n" + "=" * 65)
     print("--- MISSION AUTONOME EN BOUCLE FERMÉE (POIDS GELÉS) ---")
@@ -157,9 +166,11 @@ def run_autonomous_session(
                 break
 
             # Inférence par la politique neuronale
-            input_tensor = torch.tensor([in_0, in_1, in_2], dtype=torch.float32)
-            with torch.no_grad():
-                cmd = model(input_tensor).squeeze().tolist()
+            cmd_raw = model([in_0, in_1, in_2])
+            if hasattr(cmd_raw, "tolist"):
+                cmd = cmd_raw.tolist()
+            else:
+                cmd = list(cmd_raw)
 
             # Dénormalisation depuis [-1.0, +1.0] vers les vitesses physiques réelles
             v_cmd = max(-V_MAX, min(V_MAX, float(cmd[0]) * V_MAX))

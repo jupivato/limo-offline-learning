@@ -46,8 +46,9 @@ Ensure ROS 2 (Humble or Foxy) and the AgileX LIMO Gazebo packages are sourced in
 # Source standard ROS 2 setup
 source /opt/ros/humble/setup.bash
 
-# Source LIMO simulation workspace (adjust path if your workspace is named differently)
-source ~/limo_ws/install/setup.bash
+# Source LIMO simulation workspace
+source ~/ros2_ws/install/setup.bash
+# (or source /home/juliapivato/Documentos/PPE/ros2_ws/install/setup.bash)
 ```
 
 ---
@@ -205,28 +206,28 @@ Runs the 20 test scenarios inside Gazebo using ROS 2 `/cmd_vel` and `/odom`. The
 
 #### Terminal 1 — Start Gazebo Simulation:
 ```bash
-# Source ROS 2 environment
+# Source ROS 2 Humble & limo_ros2 workspace
 source /opt/ros/humble/setup.bash
-source ~/limo_ws/install/setup.bash
+source ~/ros2_ws/install/setup.bash
 
-# Launch the AgileX LIMO 4WD world
-ros2 launch limo_gazebo limo_4wd.launch.py
+# Launch the AgileX LIMO 4-wheel differential simulation
+ros2 launch limo_description gazebo_models_diff.launch.py
 ```
-*(Wait until Gazebo is fully loaded and `/odom` is publishing).*
+*(Wait until Gazebo 3D opens with the LIMO robot at `(0,0,0)` and `/odom` starts publishing).*
 
-#### Terminal 2 — Launch Automated Benchmark:
+#### Terminal 2 — Launch Automated Benchmark with Teleportation:
 ```bash
 # Source ROS 2 environment
 source /opt/ros/humble/setup.bash
-source ~/limo_ws/install/setup.bash
+source ~/ros2_ws/install/setup.bash
 
 # Navigate to project and launch
 cd ~/Documentos/PPE/limo-offline-learning
-python3 src/evaluation/run_batch_benchmark.py --weights models/supervised_w_torch_diff.json --suite extended --gazebo --outdir data/evaluation/gazebo_20_benchmark
+python3 src/evaluation/run_batch_benchmark.py --weights models/pioneer_model_weights.json --suite extended --gazebo --outdir data/evaluation/gazebo_20_benchmark
 ```
 
 ### What Happens Automatically in Mode B:
-1. The script calls the Gazebo entity state reset (`gz model -m limo -x ... -y ... -Y ...`) to teleport the vehicle to Scenario 1.
+1. The script calls the Gazebo entity state reset (`gz model -m limo_description -x ... -y ... -Y ...`) or the `/set_entity_state` ROS 2 service to teleport the vehicle to Scenario 1.
 2. It pauses $350\text{ ms}$ for physics stabilization and recalibrates odometry.
 3. PioneerNN drives the robot in closed loop at 20 Hz via `/cmd_vel`.
 4. When the docking tolerance is reached (or 60s timeout), the robot stops, logs telemetry, and repeats for Scenarios 2 through 20.
