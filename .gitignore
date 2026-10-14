@@ -49,7 +49,7 @@ res/
 *.png
 *.jpg
 *.svg
-!docs/images/**
+!docs/images/curva_aprendizado_*.png
 models/**/training_history.json
 
 # Keep empty data folders tracked

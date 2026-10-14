@@ -53,9 +53,9 @@ from src.core.pioneer_nn import PioneerNN
 # ==============================================================================
 # ⚙️ CONFIGURAÇÕES GLOBAIS DE TREINAMENTO (MODIFIQUE DIRETAMENTE AQUI)
 # ==============================================================================
-EPOCHS = 150              # Número total de épocas de treinamento
-LEARNING_RATE = 0.001     # Taxa de aprendizado constante (SGD Puro, sem scheduler)
-BATCH_SIZE = 256          # Tamanho do mini-lote (batch)
+EPOCHS = 100              # Número total de épocas de treinamento
+LEARNING_RATE = 0.5       # Taxa de aprendizado constante (SGD Puro, sem scheduler)
+BATCH_SIZE = 1          # Tamanho do mini-lote (batch)
 BETA = 1.0                # Peso da velocidade angular na perda: MSE(v) + beta * MSE(w)
 HIDDEN_SIZE = 1000        # Número de neurônios na camada oculta
 USE_BIAS = False          # False = garante velocidade 0.0 na doca (0,0,0) sem tremores
