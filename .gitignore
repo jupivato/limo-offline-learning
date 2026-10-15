@@ -39,18 +39,23 @@ data/augmented/**/*.csv
 data/curated/**/*.csv
 data/curated/**/*.svg
 data/curated/**/*.html
-data/evaluation/**
-!data/evaluation/**/
-!data/evaluation/**/.gitkeep
-res/
-*.log
-
-# Evaluation results, metrics and plots
+# Evaluation results, metrics, benchmarks and plots (local analysis only)
+data/evaluation/
+docs/images/
 *.png
 *.jpg
 *.svg
-!docs/images/curva_aprendizado_*.png
+res/
+*.log
 models/**/training_history.json
+
+# Study documents and experimental scripts (local research only)
+docs/EXPLICATION_PERTE_MSE.md
+docs/LEARNING_RATE_STUDY.md
+docs/PLANIFICATION_APPRENTISSAGE_HORS_LIGNE.md
+docs/PARALLEL_PARKING_IMPROVEMENT_PLAN.md
+src/run_individual_trainings*.py
+src/evaluation/plot_individual_grid_study.py
 
 # Keep empty data folders tracked
 !data/**/.gitkeep

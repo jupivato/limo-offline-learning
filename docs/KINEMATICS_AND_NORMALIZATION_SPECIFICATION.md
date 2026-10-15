@@ -36,6 +36,41 @@ The AgileX LIMO mobile robot exhibits the following manufacturer baseline charac
 | **Datasheet Max Angular Rate** | $\omega_{\text{mfg}}$ | $1.00 \sim 2.00\text{ rad/s}$ | In-place rotation limit before motor torque sag |
 | **ROS 2 Driver Safety Ceiling** | $v_{\text{safe}}, \omega_{\text{safe}}$ | $0.50\text{ m/s}, 1.00\text{ rad/s}$ | Enforced in `limo_interface.py` to protect gearboxes |
 
+### 2.1. Metrological Standards, Units of Measure & ROS REP-103 Compliance
+
+All telemetry, state estimation, control setpoints, and neural network targets strictly adhere to the international robotic standard **[ROS REP 103: Standard Units of Measure and Coordinate System Conventions](https://www.ros.org/reps/rep-0103.html)** and the International System of Units (SI):
+
+| Physical Quantity | Symbol | Standard SI Unit | ROS 2 Message & Field | Definition & Value in Project |
+| :--- | :---: | :---: | :--- | :--- |
+| **Linear Position (2D)** | $x, y$ | $\text{m}$ (meters) | `geometry_msgs/Point` | Arena Cartesian coordinate ($[-5.0, +5.0]\text{ m}$) |
+| **Heading / Orientation** | $\theta$ | $\text{rad}$ (radians) | `geometry_msgs/Quaternion` | Principal angle in $[-\pi, +\pi]\text{ rad}$ ($[-180^\circ, +180^\circ]$) |
+| **Linear Velocity** | $v$ | $\text{m/s}$ (meters/sec) | `Twist.linear.x` | Longitudinal motion ($V_{\max} = 0.24\text{ m/s}$) |
+| **Angular Velocity** | $\omega$ | **$\text{rad/s}$ (radians/sec)** | `Twist.angular.z` | Yaw rotational speed ($\Omega_{\max} = 0.50\text{ rad/s} \approx 28.65^\circ/\text{s}$) |
+| **Control Frequency** | $f_{\text{ctrl}}$ | $\text{Hz}$ (Hertz) | Wall-clock rate | Nominal $20\text{ Hz}$ ($\Delta t = 50\text{ ms}$) |
+
+#### Dimensional Proof: Why Angular Velocity MUST be in $\text{rad/s}$ (Not $\text{deg/s}$)
+
+In differential-drive mobile robotics, the unicycle kinematics relating the central vehicle twist $(v, \omega)$ to the peripheral linear velocities of the left ($v_L$) and right ($v_R$) wheels are governed by:
+$$v_R = v + \frac{L}{2} \cdot \omega, \qquad v_L = v - \frac{L}{2} \cdot \omega$$
+
+Applying dimensional analysis to each term:
+- $[v] = \frac{\text{m}}{\text{s}}$
+- $[L] = \text{m} \implies \left[\frac{L}{2}\right] = \text{m}$
+- For the addition $v + \frac{L}{2} \cdot \omega$ to be physically homogeneous, the product $\left[\frac{L}{2} \cdot \omega\right]$ **must** have dimension $\frac{\text{m}}{\text{s}}$:
+  $$[\text{m}] \times [\omega] = \frac{\text{m}}{\text{s}} \implies [\omega] = \frac{1}{\text{s}} \equiv \frac{\text{rad}}{\text{s}}$$
+
+Because radians are dimensionless geometric ratios ($\text{arc length} / \text{radius} = \text{m} / \text{m} = 1$), $\text{rad/s}$ preserves dimensional homogeneity without introducing arbitrary conversion factors. If $\omega$ were expressed in degrees per second ($\text{deg/s}$), the kinematic equations would require an explicit conversion factor of $\frac{\pi}{180^\circ} \approx 0.01745$, which is **absent** from the AgileX LIMO firmware and the ROS 2 differential drive controller (`diff_drive_controller`).
+
+#### Handy Metrological Conversion Table for Reports and Defenses
+
+| Rotational State | Value ($\text{rad/s}$) | Equivalent in Degrees ($\text{deg/s}$) | Physical Interpretation on LIMO Chassis |
+| :--- | :---: | :---: | :--- |
+| **Zero Rotation** | $0.00\text{ rad/s}$ | $0.00^\circ/\text{s}$ | Pure straight-line motion ($v_L = v_R$) |
+| **Fine Alignment** | $\pm 0.10\text{ rad/s}$ | $\pm 5.73^\circ/\text{s}$ | Smooth heading correction near docking target |
+| **Standard Turn** | $\pm 0.25\text{ rad/s}$ | $\pm 14.32^\circ/\text{s}$ | Dubins approach arc transition |
+| **Max Policy Speed ($\Omega_{\max}$)** | $\pm \mathbf{0.50\text{ rad/s}}$ | $\pm \mathbf{28.65^\circ/\text{s}}$ | Full supervisory turn rate ($360^\circ$ circle in $12.57\text{ s}$) |
+| **Firmware Limit ($\omega_{\text{mfg}}$)** | $\pm 1.00\text{ rad/s}$ | $\pm 57.30^\circ/\text{s}$ | Maximum allowable safety ceiling in hardware |
+
 ---
 
 ## 3. Kinematic Parameter Derivation

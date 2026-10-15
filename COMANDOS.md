@@ -7,7 +7,7 @@ Este documento contém **TODOS os comandos do projeto organizados na ordem exata
 ## 📋 Sumário Rápido dos Passos
 
 1. [Passo 0: Carregar o Ambiente](#passo-0-carregar-o-ambiente-em-qualquer-terminal)
-2. [Passo 1: Dataset de Treinamento (70.664 amostras)](#passo-1-dataset-de-treinamento)
+2. [Passo 1: Dataset de Treinamento (62.524 amostras)](#passo-1-dataset-de-treinamento)
 3. [Passo 2: Treinar a Rede Neural (150 épocas, lr=0.001, SGD)](#passo-2-treinar-a-rede-neural-offline)
 4. [Passo 3: Gráfico da Curva de Perda (Loss MSE)](#passo-3-gerar-gráfico-da-curva-de-perda)
 5. [Passo 4: Matrizes de Confusão e Análise do Dataset](#passo-4-matrizes-de-confusão-e-análise-do-dataset)
@@ -33,11 +33,18 @@ source ~/ros2_ws/install/setup.bash
 cd ~/Documentos/PPE/limo-offline-learning
 ```
 
+> [!NOTE]
+> **Padrão de Unidades do Projeto (Norma ROS REP-103)**:
+> - **Velocidade Angular ($\omega$)**: sempre em **$\text{rad/s}$ (radianos por segundo)**. $\Omega_{\max} = 1.00\text{ rad/s} \approx 57.30^\circ/\text{s}$.
+> - **Velocidade Linear ($v$)**: em **$\text{m/s}$ (metros por segundo)**. $V_{\max} = 0.50\text{ m/s}$.
+> - **Orientação e Ângulos ($\theta$)**: em **$\text{rad}$ (radianos)** no intervalo $[-\pi, +\pi]$.
+> - **Coordenadas e Distâncias ($x, y, d$)**: em **$\text{m}$ (metros)**.
+
 ---
 
 ## Passo 1: Dataset de Treinamento
 
-> *Nota: O dataset canônico com **70.664 amostras** já está salvo e balanceado em `data/dataset.csv`. Só rode este passo se você quiser regerá-lo do zero.*
+> *Nota: O dataset canônico com **62.524 amostras** já está salvo e balanceado em `data/dataset.csv`. Só rode este passo se você quiser regerá-lo do zero.*
 
 ```bash
 cd ~/Documentos/PPE/limo-offline-learning
@@ -85,7 +92,7 @@ python3 src/plot_curves.py
 
 ## Passo 4: Matrizes de Confusão e Análise do Dataset
 
-Avalia a rede contra todas as **70.664 amostras** do dataset e gera diagnósticos estatísticos completos:
+Avalia a rede contra todas as **62.524 amostras** do dataset e gera diagnósticos estatísticos completos:
 
 ```bash
 cd ~/Documentos/PPE/limo-offline-learning

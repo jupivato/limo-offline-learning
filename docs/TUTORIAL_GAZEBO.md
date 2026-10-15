@@ -66,6 +66,14 @@ flowchart LR
 > [!IMPORTANT]
 > **Watchdog de 500 ms**: O controlador espera mensagens em `/cmd_vel` com frequência mínima de 20 Hz (a cada 50 ms). Se o código parar de publicar por mais de 500 ms, o robô para por segurança.
 
+> [!NOTE]
+> **Padrão Oficial de Unidades (ROS REP-103)**:  
+> Em conformidade com o padrão internacional da robótica móvel [ROS REP-103](https://www.ros.org/reps/rep-0103.html):
+> - **Velocidade Linear ($v$)**: expressa em **metros por segundo ($\text{m/s}$)** ($V_{\max} = 0.24\text{ m/s}$).
+> - **Velocidade Angular ($\omega$)**: expressa estritamente em **radianos por segundo ($\text{rad/s}$)** ($\Omega_{\max} = 0.50\text{ rad/s} \approx 28.65^\circ/\text{s}$). Nunca em graus/s.
+> - **Orientação ($\theta$)**: expressa em **radianos ($\text{rad}$)** no intervalo principal $[-\pi, +\pi]$.
+> - **Distâncias ($x, y$)**: expressas em **metros ($\text{m}$)**.
+
 ---
 
 ## 4. Passo a Passo Completo: Execução Terminal por Terminal

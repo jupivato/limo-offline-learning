@@ -51,28 +51,30 @@ except Exception:
 from src.core.pioneer_nn import PioneerNN
 
 # ==============================================================================
-# ⚙️ CONFIGURAÇÕES GLOBAIS DE TREINAMENTO (MODIFIQUE DIRETAMENTE AQUI)
+# ⚙️ CONFIGURAÇÕES GLOBAIS DE TREINAMENTO E DESNORMALIZAÇÃO (MODIFIQUE DIRETAMENTE AQUI)
 # ==============================================================================
-USE_ADAMW = False          # False = SGD Puro (taxa constante) | True = AdamW (otimizador adaptativo com weight decay)
-WEIGHT_DECAY = 1e-4        # Penalidade L2 / Decaimento de pesos (usado quando USE_ADAMW = True)
-EPOCHS = 500              # Número total de épocas de treinamento
-LEARNING_RATE = 0.25       # Taxa de aprendizado constante
-BATCH_SIZE = 250          # Tamanho do mini-lote (batch)
-BETA = 1.0                # Peso da velocidade angular na perda: MSE(v) + beta * MSE(w)
-HIDDEN_SIZE = 100         # Número de neurônios na camada oculta
-USE_BIAS = True           # False = garante velocidade 0.0 na doca (0,0,0) sem tremores
+USE_ADAMW = False          # False = SGD Puro | True = AdamW (com agendador e weight decay automáticos)
+LEARNING_RATE = 0.5      # Taxa de aprendizado global (aplicada diretamente ao otimizador selecionado)
+
+EPOCHS = 150               # Número total de épocas de treinamento
+BATCH_SIZE = 256           # Tamanho do mini-lote (batch)
+BETA = 1.0                 # Peso da velocidade angular na perda: MSE(v) + beta * MSE(w)
+HIDDEN_SIZE = 1000         # Número de neurônios na camada oculta
+USE_BIAS = True            # False = garante velocidade 0.0 na doca (0,0,0) sem tremores
+
+# Escalas de Desnormalização / Velocidades Máximas do Robô
+V_MAX = 0.50              # Velocidade linear máxima de desnormalização (m/s)
+W_MAX = 1.00              # Velocidade angular máxima de desnormalização (rad/s)
+
+# Dimensões da Arena (m)
+X_MAX = 5.0               # Limite da arena em X (metros)
+Y_MAX = 5.0               # Limite da arena em Y (metros)
+ALPHA = [1.0 / X_MAX, 1.0 / Y_MAX, 1.0 / math.pi]
 
 DATASET_CSV = "data/dataset.csv"                         # Arquivo do dataset
 OUTPUT_WEIGHTS = "models/supervised_w_torch_diff.json"   # Onde salvar os pesos do modelo
 OUTPUT_HISTORY = "models/training_history.json"          # Onde salvar o histórico de treino
 # ==============================================================================
-
-# Limites físicos e de normalização do AgileX LIMO
-X_MAX = 5.0   # Limite da arena em X (metros)
-Y_MAX = 5.0   # Limite da arena em Y (metros)
-V_MAX = 0.24  # Velocidade linear máxima de cruzeiro (m/s)
-W_MAX = 0.50  # Velocidade angular máxima (rad/s)
-ALPHA = [1.0 / X_MAX, 1.0 / Y_MAX, 1.0 / math.pi]
 
 
 class WeightedMSELoss(nn.Module if TORCH_AVAILABLE else object):
@@ -148,9 +150,13 @@ def _train_with_torch(
     learning_rate: float,
     beta: float,
     use_bias: bool,
-    hidden_size: int,
+    hidden_size: int = HIDDEN_SIZE,
     use_adamw: bool = False,
-    weight_decay: float = 1e-4
+    weight_decay: float = 1e-4,
+    use_scheduler: bool = False,
+    scheduler_patience: int = 5,
+    scheduler_factor: float = 0.5,
+    min_lr: float = 1e-6
 ) -> Dict[str, Any]:
     """Treinamento acelerado via PyTorch."""
     opt_label = "AdamW (Adaptativo)" if use_adamw else "SGD Puro (Taxa Constante)"
@@ -182,7 +188,20 @@ def _train_with_torch(
         print(f"Otimizador           : SGD Puro (lr={learning_rate}, momentum=0.0, weight_decay=0.0)")
         optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate, momentum=0.0, weight_decay=0.0)
 
-    history = {"epochs": [], "train_loss": [], "val_loss": [], "learning_rate": []}
+    scheduler = None
+    if use_scheduler:
+        print(f"Agendador de LR      : ReduceLROnPlateau (fator={scheduler_factor}, paciência={scheduler_patience}, min_lr={min_lr})")
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer, mode="min", factor=scheduler_factor, patience=scheduler_patience, min_lr=min_lr
+        )
+
+    history = {
+        "optimizer": "AdamW" if use_adamw else "SGD",
+        "epochs": [],
+        "train_loss": [],
+        "val_loss": [],
+        "learning_rate": []
+    }
     best_val_loss = float("inf")
     best_weights_json = None
     start_time = time.time()
@@ -217,13 +236,18 @@ def _train_with_torch(
 
         avg_val_loss = running_val_loss / max(1, n_val_batches)
 
+        if scheduler is not None:
+            scheduler.step(avg_val_loss)
+
+        current_lr = float(optimizer.param_groups[0]["lr"])
+
         history["epochs"].append(epoch)
         history["train_loss"].append(avg_train_loss)
         history["val_loss"].append(avg_val_loss)
-        history["learning_rate"].append(learning_rate)
+        history["learning_rate"].append(current_lr)
 
         if epoch % 5 == 0 or epoch == 1 or epoch == epochs:
-            print(f"Época {epoch:3d}/{epochs} | Treino: {avg_train_loss:.6f} | Validação: {avg_val_loss:.6f} | LR: {learning_rate:.6f}")
+            print(f"Época {epoch:3d}/{epochs} | Treino: {avg_train_loss:.6f} | Validação: {avg_val_loss:.6f} | LR: {current_lr:.6f}")
 
         if avg_val_loss < best_val_loss:
             best_val_loss = avg_val_loss
@@ -255,9 +279,13 @@ def _train_with_numpy(
     batch_size: int,
     learning_rate: float,
     beta: float,
-    hidden_size: int,
+    hidden_size: int = HIDDEN_SIZE,
     use_adamw: bool = False,
-    weight_decay: float = 1e-4
+    weight_decay: float = 1e-4,
+    use_scheduler: bool = False,
+    scheduler_patience: int = 5,
+    scheduler_factor: float = 0.5,
+    min_lr: float = 1e-6
 ) -> Dict[str, Any]:
     """Treinamento de alta velocidade via NumPy (garantido sem erros de ABI C++)."""
     opt_label = "AdamW Vectorisé" if use_adamw else "SGD Pur a Taxa Constante"
@@ -286,7 +314,18 @@ def _train_with_numpy(
         beta1, beta2, eps = 0.9, 0.999, 1e-8
         t_step = 0
 
-    history = {"epochs": [], "train_loss": [], "val_loss": [], "learning_rate": []}
+    curr_lr = float(learning_rate)
+    epochs_no_improve = 0
+    if use_scheduler:
+        print(f"Agendador de LR      : ReduceLROnPlateau (fator={scheduler_factor}, paciência={scheduler_patience}, min_lr={min_lr})")
+
+    history = {
+        "optimizer": "AdamW" if use_adamw else "SGD",
+        "epochs": [],
+        "train_loss": [],
+        "val_loss": [],
+        "learning_rate": []
+    }
     best_val_loss = float("inf")
     best_W1, best_W2 = W1.copy(), W2.copy()
     start_time = time.time()
@@ -324,24 +363,24 @@ def _train_with_numpy(
             if use_adamw:
                 t_step += 1
                 # Weight decay
-                W1 -= learning_rate * weight_decay * W1
-                W2 -= learning_rate * weight_decay * W2
+                W1 -= curr_lr * weight_decay * W1
+                W2 -= curr_lr * weight_decay * W2
 
                 m_W1 = beta1 * m_W1 + (1.0 - beta1) * dW1
                 v_W1 = beta2 * v_W1 + (1.0 - beta2) * (dW1 ** 2)
                 m_hat_W1 = m_W1 / (1.0 - beta1 ** t_step)
                 v_hat_W1 = v_W1 / (1.0 - beta2 ** t_step)
-                W1 -= learning_rate * m_hat_W1 / (np.sqrt(v_hat_W1) + eps)
+                W1 -= curr_lr * m_hat_W1 / (np.sqrt(v_hat_W1) + eps)
 
                 m_W2 = beta1 * m_W2 + (1.0 - beta1) * dW2
                 v_W2 = beta2 * v_W2 + (1.0 - beta2) * (dW2 ** 2)
                 m_hat_W2 = m_W2 / (1.0 - beta1 ** t_step)
                 v_hat_W2 = v_W2 / (1.0 - beta2 ** t_step)
-                W2 -= learning_rate * m_hat_W2 / (np.sqrt(v_hat_W2) + eps)
+                W2 -= curr_lr * m_hat_W2 / (np.sqrt(v_hat_W2) + eps)
             else:
                 # Atualização estrita SGD Puro
-                W1 -= learning_rate * dW1
-                W2 -= learning_rate * dW2
+                W1 -= curr_lr * dW1
+                W2 -= curr_lr * dW2
 
         avg_train = train_loss_acc / max(1, n_batches)
 
@@ -351,13 +390,22 @@ def _train_with_numpy(
         diff_val = pred_val - Y_val
         avg_val = float(np.mean(diff_val[:, 0] ** 2) + beta * np.mean(diff_val[:, 1] ** 2))
 
+        if use_scheduler:
+            if avg_val >= best_val_loss - 1e-5:
+                epochs_no_improve += 1
+                if epochs_no_improve >= scheduler_patience:
+                    curr_lr = max(min_lr, curr_lr * scheduler_factor)
+                    epochs_no_improve = 0
+            else:
+                epochs_no_improve = 0
+
         history["epochs"].append(epoch)
         history["train_loss"].append(float(avg_train))
         history["val_loss"].append(avg_val)
-        history["learning_rate"].append(learning_rate)
+        history["learning_rate"].append(float(curr_lr))
 
         if epoch % 5 == 0 or epoch == 1 or epoch == epochs:
-            print(f"Época {epoch:3d}/{epochs} | Treino: {avg_train:.6f} | Validação: {avg_val:.6f} | LR: {learning_rate:.6f}")
+            print(f"Época {epoch:3d}/{epochs} | Treino: {avg_train:.6f} | Validação: {avg_val:.6f} | LR: {curr_lr:.6f}")
 
         if avg_val < best_val_loss:
             best_val_loss = avg_val
@@ -391,26 +439,41 @@ def train_offline(
     history_output_path: str = OUTPUT_HISTORY,
     epochs: int = EPOCHS,
     batch_size: int = BATCH_SIZE,
+    use_adamw: bool = USE_ADAMW,
     learning_rate: float = LEARNING_RATE,
     beta: float = BETA,
     use_bias: bool = USE_BIAS,
     hidden_size: int = HIDDEN_SIZE,
-    use_adamw: bool = USE_ADAMW,
-    weight_decay: float = WEIGHT_DECAY,
 ) -> Dict[str, Any]:
     """
-    Executa o treinamento offline completo com opção de SGD Puro ou AdamW.
+    Executa o treinamento offline completo da PioneerNN.
+    - Tanto o AdamW quanto o SGD Puro utilizam diretamente a variável global LEARNING_RATE.
+    - Se use_adamw = True : AdamW adaptativo com agendador ReduceLROnPlateau e weight decay ativados por padrão.
+    - Se use_adamw = False: SGD Puro clássico com taxa constante e sem weight decay por padrão.
     """
-    opt_label = "AdamW (Adaptativo)" if use_adamw else "SGD Puro (Taxa Constante)"
+    effective_lr = float(learning_rate)
+
+    if use_adamw:
+        opt_label = "AdamW (Adaptativo)"
+        weight_decay = 1e-4
+        use_scheduler = True
+        sched_label = "ReduceLROnPlateau (fator=0.5, paciência=5, min_lr=1e-6)"
+    else:
+        opt_label = "SGD Puro (Taxa Constante)"
+        weight_decay = 0.0
+        use_scheduler = False
+        sched_label = "Taxa Fixa Constante"
+
     print("\n" + "=" * 68)
     print(f"  TREINAMENTO OFFLINE — PIONEER NN ({opt_label.upper()})")
     print("=" * 68)
     print(f"Otimizador           : {opt_label}")
     if use_adamw:
         print(f"Weight Decay (L2)    : {weight_decay}")
+    print(f"Agendador de LR      : {sched_label}")
     print(f"Dataset              : {dataset_path}")
     print(f"Épocas               : {epochs}")
-    print(f"Taxa de Aprendizado  : {learning_rate}")
+    print(f"Taxa de Aprendizado  : {effective_lr}")
     print(f"Tamanho do Batch     : {batch_size}")
     print(f"Bêta (peso angular)  : {beta}")
     print(f"Neurônios ocultos    : {hidden_size} (Tanh)")
@@ -424,14 +487,18 @@ def train_offline(
     if TORCH_AVAILABLE:
         result = _train_with_torch(
             inputs, targets, weights_output_path, history_output_path,
-            epochs, batch_size, learning_rate, beta, use_bias, hidden_size,
-            use_adamw=use_adamw, weight_decay=weight_decay
+            epochs, batch_size, effective_lr, beta, use_bias, hidden_size,
+            use_adamw=use_adamw, weight_decay=weight_decay,
+            use_scheduler=use_scheduler, scheduler_patience=5,
+            scheduler_factor=0.5, min_lr=1e-6
         )
     elif NUMPY_AVAILABLE:
         result = _train_with_numpy(
             inputs, targets, weights_output_path, history_output_path,
-            epochs, batch_size, learning_rate, beta, hidden_size,
-            use_adamw=use_adamw, weight_decay=weight_decay
+            epochs, batch_size, effective_lr, beta, hidden_size,
+            use_adamw=use_adamw, weight_decay=weight_decay,
+            use_scheduler=use_scheduler, scheduler_patience=5,
+            scheduler_factor=0.5, min_lr=1e-6
         )
     else:
         raise RuntimeError("Nem PyTorch nem NumPy foram encontrados. Execute: pip install numpy torch")
@@ -462,11 +529,10 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="Treinamento Offline do LIMO (PioneerNN com SGD Puro ou AdamW)")
     parser.add_argument("--epochs", type=int, default=EPOCHS, help=f"Número de épocas (padrão: {EPOCHS})")
-    parser.add_argument("--lr", type=float, default=LEARNING_RATE, help=f"Taxa de aprendizado (padrão: {LEARNING_RATE})")
     parser.add_argument("--batch-size", type=int, default=BATCH_SIZE, help=f"Tamanho do batch (padrão: {BATCH_SIZE})")
-    parser.add_argument("--adamw", action="store_true", default=USE_ADAMW, help="Ativa o otimizador AdamW (padrão configurado em USE_ADAMW)")
-    parser.add_argument("--sgd", action="store_false", dest="adamw", help="Força o uso do SGD Puro")
-    parser.add_argument("--weight-decay", type=float, default=WEIGHT_DECAY, help=f"Weight decay para AdamW (padrão: {WEIGHT_DECAY})")
+    parser.add_argument("--adamw", action="store_true", default=USE_ADAMW, help="Ativa o otimizador AdamW (com agendador e weight decay automáticos)")
+    parser.add_argument("--sgd", action="store_false", dest="adamw", help="Força o uso do SGD Puro (taxa constante)")
+    parser.add_argument("--lr", type=float, default=LEARNING_RATE, help=f"Taxa de aprendizado global (padrão global: {LEARNING_RATE})")
     parser.add_argument("--dataset", type=str, default=DATASET_CSV, help=f"Arquivo dataset (padrão: {DATASET_CSV})")
     parser.add_argument("--output", type=str, default=OUTPUT_WEIGHTS, help=f"Onde salvar o modelo (padrão: {OUTPUT_WEIGHTS})")
     parser.add_argument("--history", type=str, default=OUTPUT_HISTORY, help=f"Onde salvar o histórico (padrão: {OUTPUT_HISTORY})")
@@ -478,7 +544,6 @@ if __name__ == "__main__":
         history_output_path=args.history,
         epochs=args.epochs,
         batch_size=args.batch_size,
-        learning_rate=args.lr,
         use_adamw=args.adamw,
-        weight_decay=args.weight_decay,
+        learning_rate=args.lr,
     )

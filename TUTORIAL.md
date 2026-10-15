@@ -11,7 +11,7 @@
 
 1. [System Prerequisites & Environment Setup](#1-system-prerequisites--environment-setup)
 2. [Workspace Directory Structure & Navigation (`cd`)](#2-workspace-directory-structure--navigation-cd)
-3. [Step 1: Dataset Generation (Canonical 70,664 Samples)](#3-step-1-dataset-generation-canonical-70664-samples)
+3. [Step 1: Dataset Generation (Canonical 62,524 Samples)](#3-step-1-dataset-generation-canonical-62524-samples)
 4. [Step 2: Neural Network Offline Training (Pure Constant SGD)](#4-step-2-neural-network-offline-training-pure-constant-sgd)
 5. [Step 3: Training Convergence Curve Visualization](#5-step-3-training-convergence-curve-visualization)
 6. [Step 4: Confusion Matrices & Dataset Diagnostics](#6-step-4-confusion-matrices--dataset-diagnostics)
@@ -51,6 +51,13 @@ source ~/ros2_ws/install/setup.bash
 # (or source /home/juliapivato/Documentos/PPE/ros2_ws/install/setup.bash)
 ```
 
+### 1.3. Kinematic Units of Measure & Standard Compliance (ROS REP 103)
+In strict compliance with **[ROS REP 103](https://www.ros.org/reps/rep-0103.html)** and SI metrology:
+- **Linear Velocity ($v$)**: measured in **$\text{m/s}$ (meters/second)** ($V_{\max} = 0.50\text{ m/s}$).
+- **Angular Velocity ($\omega$)**: measured strictly in **$\text{rad/s}$ (radians/second)** ($\Omega_{\max} = 1.00\text{ rad/s} \approx 57.30^\circ/\text{s}$). Never degrees/second.
+- **Orientation / Heading ($\theta$)**: measured in **$\text{rad}$ (radians)** ($[-\pi, +\pi]$).
+- **Position ($x, y$) and Distance ($d$)**: measured in **$\text{m}$ (meters)**.
+
 ---
 
 ## 2. Workspace Directory Structure & Navigation (`cd`)
@@ -70,13 +77,13 @@ cd ~/Documentos/PPE/limo-offline-learning
 | `src/evaluation/` | Benchmarking scripts, data loggers, visualizers |
 | `src/ros2/` | ROS 2 interface for `/odom`, `/cmd_vel`, and Gazebo teleportation |
 | `data/` | Canonical dataset (`dataset.csv`) |
-| `data/evaluation/` | CSV telemetry logs, benchmark runs, ISO metrics reports |
-| `models/` | Trained model weights (`.json`) and training history (`.json`) |
-| `docs/images/` | All publication-ready high-resolution plots (300 DPI PNGs) |
+| `data/evaluation/` | CSV telemetry logs, benchmark runs, ISO metrics reports (local) |
+| `models/` | Trained model weights (`.json`) |
+| `docs/` | Architecture & simulation specifications |
 
 ---
 
-## 3. Step 1: Dataset Generation (Canonical 70,664 Samples)
+## 3. Step 1: Dataset Generation (Canonical 62,524 Samples)
 
 *(Note: A validated dataset is already provided at `data/dataset.csv`. You only need to run this step if you want to regenerate it from scratch).*
 
@@ -89,11 +96,11 @@ python3 src/generate_dataset.py --output data/dataset.csv --x-max 5.0 --y-max 5.
 ### What this script does:
 1. Samples an operational grid from $-5.0\text{ m}$ to $+5.0\text{ m}$ at $0.5\text{ m}$ intervals.
 2. Generates a fine-density docking subgrid around the dock origin ($|x|, |y| \le 0.6\text{ m}$).
-3. Executes 20 Hz closed-loop trajectories using pure unicycle differential kinematics.
+3. Executes 20 Hz closed-loop trajectories using pure unicycle differential kinematics with correct parking rotation.
 4. Enforces sagittal bilateral mirroring ($(x, y, \theta, v, \omega) \implies (x, -y, -\theta, v, -\omega)$) ensuring zero directional bias.
 
 ### Saved Output:
-- `data/dataset.csv` (70,664 rows, 5 columns: `x_target_robot`, `y_target_robot`, `theta_robot`, `v_robot`, `w_robot`).
+- `data/dataset.csv` (62,524 rows, 5 columns: `x_target_robot`, `y_target_robot`, `theta_robot`, `v_robot`, `w_robot`).
 
 ---
 
@@ -153,7 +160,7 @@ python3 src/plot_curves.py --history models/training_history.json --outdir data/
 
 ## 6. Step 4: Confusion Matrices & Dataset Diagnostics
 
-To evaluate the neural network against all 70,664 expert actions and verify discrete classification accuracy ($v \in \{-0.24, 0.0, 0.24\}$, $\omega \in \{-0.50, 0.0, 0.50\}$):
+To evaluate the neural network against all 62,524 expert actions and verify discrete classification accuracy ($v \in \{-0.50, 0.0, 0.50\}$, $\omega \in \{-1.00, 0.0, 1.00\}$):
 
 ### Terminal Command:
 ```bash

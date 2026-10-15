@@ -56,10 +56,14 @@ os.makedirs(OUT_EVAL_DIR, exist_ok=True)
 
 WEIGHTS_PATH = "models/supervised_w_torch_diff.json"
 
-X_MAX = 5.0
-Y_MAX = 5.0
-V_MAX = 0.24
-W_MAX = 0.50
+# ==============================================================================
+# ⚙️ CONFIGURAÇÕES GLOBAIS DE DESNORMALIZAÇÃO E LIMITES CINEMÁTICOS (MODIFIQUE AQUI)
+# ==============================================================================
+V_MAX = 0.50  # Velocidade linear máxima de desnormalização em m/s (dobrada de 0.24 para 0.50)
+W_MAX = 1.00  # Velocidade angular máxima de desnormalização em rad/s (dobrada de 0.50 para 1.00)
+X_MAX = 5.0   # Limite da arena em X (m)
+Y_MAX = 5.0   # Limite da arena em Y (m)
+# ==============================================================================
 
 
 def recast_angle(angle_rad: float) -> float:
@@ -297,7 +301,7 @@ def generate_2d_field_maps(model: PioneerNN):
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6), dpi=300)
     fig.patch.set_facecolor("#ffffff")
 
-    im1 = ax1.imshow(V_lin, extent=[-4.5, 4.5, -4.5, 4.5], origin="lower", cmap="coolwarm", vmin=-0.24, vmax=0.24)
+    im1 = ax1.imshow(V_lin, extent=[-4.5, 4.5, -4.5, 4.5], origin="lower", cmap="coolwarm", vmin=-V_MAX, vmax=V_MAX)
     ax1.scatter([0], [0], color="#16a34a", marker="*", s=160, zorder=5, label="Doca")
     ax1.set_title("Heatmap 2D : Velocidade Linear v (m/s)\n(Avanço positivo vs Frenagem na Doca)", fontsize=11, fontweight="bold")
     ax1.set_xlabel("Posição X (m)", fontsize=10, fontweight="bold")
@@ -305,7 +309,7 @@ def generate_2d_field_maps(model: PioneerNN):
     cb1 = fig.colorbar(im1, ax=ax1, fraction=0.046, pad=0.04)
     cb1.set_label("v (m/s)", fontsize=10, fontweight="bold")
 
-    im2 = ax2.imshow(W_ang, extent=[-4.5, 4.5, -4.5, 4.5], origin="lower", cmap="RdYlBu_r", vmin=-0.50, vmax=0.50)
+    im2 = ax2.imshow(W_ang, extent=[-4.5, 4.5, -4.5, 4.5], origin="lower", cmap="RdYlBu_r", vmin=-W_MAX, vmax=W_MAX)
     ax2.scatter([0], [0], color="#16a34a", marker="*", s=160, zorder=5, label="Doca")
     ax2.set_title("Heatmap 2D : Velocidade Angular ω (rad/s)\n(Simetria Sagital Esquerda / Direita)", fontsize=11, fontweight="bold")
     ax2.set_xlabel("Posição X (m)", fontsize=10, fontweight="bold")

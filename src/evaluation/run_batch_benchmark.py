@@ -53,11 +53,15 @@ except (ImportError, RuntimeError):
     ROS2_AVAILABLE = False
     LimoROS2Interface = None
 
-X_MAX = 5.0   # m
-Y_MAX = 5.0   # m
-V_MAX = 0.24  # m/s
-W_MAX = 0.50  # rad/s
+# ==============================================================================
+# ⚙️ CONFIGURAÇÕES GLOBAIS DE DESNORMALIZAÇÃO E LIMITES CINEMÁTICOS (MODIFIQUE AQUI)
+# ==============================================================================
+V_MAX = 0.50  # Velocidade linear máxima de desnormalização em m/s (dobrada de 0.24 para 0.50)
+W_MAX = 1.00  # Velocidade angular máxima de desnormalização em rad/s (dobrada de 0.50 para 1.00)
+X_MAX = 5.0   # Limite da arena em X (m)
+Y_MAX = 5.0   # Limite da arena em Y (m)
 ALPHA = [1.0 / X_MAX, 1.0 / Y_MAX, 1.0 / math.pi]
+# ==============================================================================
 
 
 def recast_angle(angle_rad: float) -> float:
@@ -305,6 +309,7 @@ def run_batch_benchmark(
     print("=" * 76)
     print(f"Modèle testé        : {weights_path}")
     print(f"Mode d'exécution    : {'Gazebo (ROS 2)' if use_gazebo else 'Simulation Cinématique (20 Hz)'}")
+    print(f"Desnormalização     : V_MAX = {V_MAX:.2f} m/s | W_MAX = {W_MAX:.2f} rad/s")
     print(f"Suite d'essais      : {suite.upper()} ({len(scenarios)} scénarios multi-distances/orientations)")
     print(f"Dossier de sortie   : {output_dir}")
     print("=" * 76)

@@ -54,12 +54,15 @@ from src.core.pioneer_nn import PioneerNN
 from src.ros2.limo_interface import LimoROS2Interface
 from src.evaluation.data_logger import DataLogger
 
-# Facteurs de normalisation robot-centriques et bornes cinématiques
-X_MAX = 5.0   # m
-Y_MAX = 5.0   # m
-V_MAX = 0.24  # m/s
-W_MAX = 0.50  # rad/s
+# ==============================================================================
+# ⚙️ CONFIGURAÇÕES GLOBAIS DE DESNORMALIZAÇÃO E LIMITES CINEMÁTICOS (MODIFIQUE AQUI)
+# ==============================================================================
+V_MAX = 0.50  # Velocidade linear máxima de desnormalização em m/s (dobrada de 0.24 para 0.50)
+W_MAX = 1.00  # Velocidade angular máxima de desnormalização em rad/s (dobrada de 0.50 para 1.00)
+X_MAX = 5.0   # Limite da arena em X (m)
+Y_MAX = 5.0   # Limite da arena em Y (m)
 ALPHA = [1.0 / X_MAX, 1.0 / Y_MAX, 1.0 / math.pi]
+# ==============================================================================
 
 
 def recast_angle(angle_rad: float) -> float:
@@ -99,6 +102,7 @@ def run_autonomous_session(
     print(f"Modèle de poids   : {weights_path}")
     print(f"Pose cible [x,y,θ]: x={target[0]:.2f} m, y={target[1]:.2f} m, theta={target[2]:.2f} rad")
     print(f"Plateforme        : {'Robot Physique' if is_real else 'Simulateur Gazebo'}")
+    print(f"Desnormalização   : V_MAX = {V_MAX:.2f} m/s | W_MAX = {W_MAX:.2f} rad/s")
     print(f"Durée maximale    : {max_duration} s")
     print("=" * 65 + "\n")
 

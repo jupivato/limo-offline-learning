@@ -25,19 +25,19 @@
             "in_2": "theta_robot_absolute / pi"
         },
         "outputs_training": {
-            "v_norm": "v_robot / 0.24 in {-1.0, 0.0, +1.0}",
-            "w_norm": "w_robot / 0.50 in {-1.0, 0.0, +1.0}"
+            "v_norm": "v_robot / 0.50 in {-1.0, 0.0, +1.0}",
+            "w_norm": "w_robot / 1.00 in {-1.0, 0.0, +1.0}"
         },
         "outputs_robot_denormalization": {
-            "v_cmd": "v_pred * 0.24",
-            "w_cmd": "w_pred * 0.50"
+            "v_cmd": "v_pred * 0.50",
+            "w_cmd": "w_pred * 1.00"
         }
     },
     "kinematics": {
-        "v_max": 0.24,
-        "v_min": -0.24,
-        "w_max": 0.50,
-        "w_min": -0.50,
+        "v_max": 0.50,
+        "v_min": -0.50,
+        "w_max": 1.00,
+        "w_min": -1.00,
         "d_brake": 0.20,
         "d_stop": 0.05
     },

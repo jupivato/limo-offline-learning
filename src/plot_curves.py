@@ -108,15 +108,18 @@ def plot_training_history(
         ax1.scatter([best_epoch], [best_val], color="#2ca02c", s=80, zorder=5,
                     label=f"Meilleure Val: {best_val:.6f} (Époque {best_epoch})")
 
+        opt_name = history.get("optimizer", "SGD")
+        opt_desc = "AdamW" if "ADAMW" in str(opt_name).upper() else "SGD Pur"
+
         ax1.set_ylabel("Erreur Quadratique Moyenne (MSE)", fontsize=11, fontweight="bold")
-        ax1.set_title("Convergence de l'Apprentissage Supervisé — PioneerNN (Dataset V2)",
+        ax1.set_title(f"Convergence de l'Apprentissage Supervisé — PioneerNN ({opt_desc})",
                       fontsize=13, fontweight="bold", pad=12)
         ax1.legend(loc="upper right", framealpha=0.95, facecolor="#ffffff", edgecolor="#e2e8f0", fontsize=10)
 
         # Sous-graphique 2 : Taux d'apprentissage (Learning Rate)
         ax2.set_facecolor("#fafbfc")
         ax2.grid(True, linestyle="--", alpha=0.6, color="#cbd5e1")
-        ax2.plot(epochs, lr_history, label="Taux d'Apprentissage (SGD Pur)", color="#9467bd", linewidth=1.8)
+        ax2.plot(epochs, lr_history, label=f"Taux d'Apprentissage ({opt_desc})", color="#9467bd", linewidth=1.8)
         ax2.set_yscale("log")
         ax2.set_xlabel("Époque d'Entraînement", fontsize=11, fontweight="bold")
         ax2.set_ylabel("Taux d'Apprentissage (LR)", fontsize=11, fontweight="bold")

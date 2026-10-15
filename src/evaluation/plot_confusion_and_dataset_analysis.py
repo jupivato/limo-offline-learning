@@ -57,11 +57,14 @@ OUT_EVAL_DIR = "data/evaluation"
 os.makedirs(OUT_IMG_DIR, exist_ok=True)
 os.makedirs(OUT_EVAL_DIR, exist_ok=True)
 
-# Parâmetros de normalização do LIMO
-X_MAX = 5.0
-Y_MAX = 5.0
-V_MAX = 0.24
-W_MAX = 0.50
+# ==============================================================================
+# ⚙️ CONFIGURAÇÕES GLOBAIS DE DESNORMALIZAÇÃO E LIMITES CINEMÁTICOS (MODIFIQUE AQUI)
+# ==============================================================================
+V_MAX = 0.50  # Velocidade linear máxima de desnormalização em m/s (dobrada de 0.24 para 0.50)
+W_MAX = 1.00  # Velocidade angular máxima de desnormalização em rad/s (dobrada de 0.50 para 1.00)
+X_MAX = 5.0   # Limite da arena em X (m)
+Y_MAX = 5.0   # Limite da arena em Y (m)
+# ==============================================================================
 
 
 def load_dataset_and_predict(dataset_path: str, weights_path: str):
@@ -222,7 +225,7 @@ def plot_prediction_histograms(targets_v, preds_v, targets_w, preds_w, save_path
     ax1.hist(preds_v * V_MAX, bins=30, alpha=0.65, color="#2563eb", label="Predição PioneerNN (Contínuo Tanh)", zorder=3)
     ax1.set_xlabel("Velocidade Linear v (m/s)", fontsize=10, fontweight="bold")
     ax1.set_ylabel("Contagem de Amostras", fontsize=10, fontweight="bold")
-    ax1.set_title("Distribuição: Velocidade Linear v\n(Ré -0.24, Parado 0.0, Frente +0.24)", fontsize=11, fontweight="bold")
+    ax1.set_title(f"Distribuição: Velocidade Linear v\n(Ré -{V_MAX:.2f}, Parado 0.0, Frente +{V_MAX:.2f})", fontsize=11, fontweight="bold")
     ax1.legend(loc="upper left", framealpha=0.95, fontsize=9)
 
     # 2. Velocidade Angular
@@ -232,7 +235,7 @@ def plot_prediction_histograms(targets_v, preds_v, targets_w, preds_w, save_path
     ax2.hist(preds_w * W_MAX, bins=30, alpha=0.65, color="#16a34a", label="Predição PioneerNN (Contínuo Tanh)", zorder=3)
     ax2.set_xlabel("Velocidade Angular ω (rad/s)", fontsize=10, fontweight="bold")
     ax2.set_ylabel("Contagem de Amostras", fontsize=10, fontweight="bold")
-    ax2.set_title("Distribuição: Velocidade Angular ω\n(Horário -0.50, Reto 0.0, Anti-horário +0.50)", fontsize=11, fontweight="bold")
+    ax2.set_title(f"Distribuição: Velocidade Angular ω\n(Horário -{W_MAX:.2f}, Reto 0.0, Anti-horário +{W_MAX:.2f})", fontsize=11, fontweight="bold")
     ax2.legend(loc="upper left", framealpha=0.95, fontsize=9)
 
     plt.tight_layout()
@@ -261,8 +264,8 @@ def main():
     cm_v = compute_confusion_matrix(true_v_cls, pred_v_cls, 3)
     cm_w = compute_confusion_matrix(true_w_cls, pred_w_cls, 3)
 
-    classes_v = ["Ré (-0.24 m/s)", "Parado (0.0 m/s)", "Frente (+0.24 m/s)"]
-    classes_w = ["Horário (-0.5 rad/s)", "Reto (0.0 rad/s)", "Anti-horário (+0.5 rad/s)"]
+    classes_v = [f"Ré (-{V_MAX:.2f} m/s)", "Parado (0.0 m/s)", f"Frente (+{V_MAX:.2f} m/s)"]
+    classes_w = [f"Horário (-{W_MAX:.2f} rad/s)", "Reto (0.0 rad/s)", f"Anti-horário (+{W_MAX:.2f} rad/s)"]
 
     print("\n4. Gerando gráficos em alta resolução...")
     # 1. Matriz Confusão Linear
