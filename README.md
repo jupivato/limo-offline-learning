@@ -191,7 +191,7 @@ python3 src/evaluation/run_batch_benchmark.py \
 
 ## 👥 Authors & Affiliation
 
-- **Framework Author**: Julia Pivato
+- **Framework Author**: Julia PIVATO DE OLIVEIRA et Zeinab KOMAIHA
 - **Project**: Projet Pluridisciplinaire en Équipe (PPE)
 - **Institution**: Centre Européen de Réalité Virtuelle (CERV) / École Nationale d'Ingénieurs de Brest (ENIB)
 - **Target Hardware**: AgileX Robotics LIMO (Four-Wheel Differential / Ackermann ROS 2 Platform)
