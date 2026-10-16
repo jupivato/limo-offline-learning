@@ -142,6 +142,7 @@ def run_simulated_benchmark_run(
     success = False
     elapsed = 0.0
     pos_history: collections.deque[Tuple[float, float, float, float]] = collections.deque(maxlen=30)
+    zero_cmd_count = 0
 
     for step in range(max_steps):
         elapsed = step * dt
@@ -175,8 +176,8 @@ def run_simulated_benchmark_run(
             old_t, old_x, old_y, old_th = pos_history[0]
             d_moved = math.hypot(x - old_x, y - old_y)
             d_rot = abs(recast_angle(th - old_th))
-            if d_moved < 0.015 and d_rot < 0.03:
-                print(f"    [Stall Détecté] Robô parou de se mover (deslocamento < 1.5cm em 1.5s a t={elapsed:.1f}s). Encerrando ensaio.")
+            if d_moved < 0.030 and d_rot < 0.050:
+                print(f"    [Parada Detectada] Robô parou totalmente seus movimentos (deslocamento < 3cm em 1.5s a t={elapsed:.1f}s). Encerrando ensaio.")
                 if dist < dist_tol and abs(e_theta) < 0.35:
                     success = True
                 break
@@ -190,6 +191,18 @@ def run_simulated_benchmark_run(
 
         v_cmd = max(-V_MAX, min(V_MAX, float(cmd[0]) * V_MAX))
         w_cmd = max(-W_MAX, min(W_MAX, float(cmd[1]) * W_MAX))
+
+        # Arrêt immédiat si la politique commande l'arrêt persistant
+        if abs(v_cmd) < 0.02 and abs(w_cmd) < 0.03:
+            zero_cmd_count += 1
+        else:
+            zero_cmd_count = 0
+
+        if elapsed > 1.0 and zero_cmd_count >= 15:
+            print(f"    [Parada Detectada] Comandos de velocidade zerados continuamente (v=0, w=0 a t={elapsed:.1f}s). Encerrando ensaio.")
+            if dist < dist_tol and abs(e_theta) < 0.35:
+                success = True
+            break
 
         logger.log(position=[x, y, th], target=target, command=[v_cmd, w_cmd], grad=[0.0, 0.0], cost=cost)
 
@@ -251,6 +264,7 @@ def run_gazebo_benchmark_run(
     dt = 0.050
     success = False
     pos_history: collections.deque[Tuple[float, float, float, float]] = collections.deque(maxlen=30)
+    zero_cmd_count = 0
 
     while rclpy.ok():
         elapsed = time.time() - start_time
@@ -288,8 +302,8 @@ def run_gazebo_benchmark_run(
             old_t, old_x, old_y, old_th = pos_history[0]
             d_moved = math.hypot(pos[0] - old_x, pos[1] - old_y)
             d_rot = abs(recast_angle(pos[2] - old_th))
-            if d_moved < 0.015 and d_rot < 0.03:
-                print(f"    [Stall Détecté] Robô parou de se mover (deslocamento < 1.5cm em 1.5s a t={elapsed:.1f}s). Encerrando ensaio.")
+            if d_moved < 0.030 and d_rot < 0.050:
+                print(f"    [Parada Detectada] Robô parou totalmente seus movimentos (deslocamento < 3cm em 1.5s a t={elapsed:.1f}s). Encerrando ensaio.")
                 if dist < dist_tol and abs(e_theta) < 0.35:
                     success = True
                 break
@@ -302,6 +316,19 @@ def run_gazebo_benchmark_run(
 
         v_cmd = max(-V_MAX, min(V_MAX, float(cmd[0]) * V_MAX))
         w_cmd = max(-W_MAX, min(W_MAX, float(cmd[1]) * W_MAX))
+
+        # Arrêt immédiat si la politique commande l'arrêt persistant
+        if abs(v_cmd) < 0.02 and abs(w_cmd) < 0.03:
+            zero_cmd_count += 1
+        else:
+            zero_cmd_count = 0
+
+        if elapsed > 1.0 and zero_cmd_count >= 15:
+            print(f"    [Parada Detectada] Comandos de velocidade zerados continuamente (v=0, w=0 a t={elapsed:.1f}s). Encerrando ensaio.")
+            if dist < dist_tol and abs(e_theta) < 0.35:
+                success = True
+            break
+
         robot.set_cmd_vel(v_cmd, w_cmd)
         logger.log(position=pos, target=target, command=[v_cmd, w_cmd], grad=[0.0, 0.0], cost=cost)
 
@@ -500,8 +527,9 @@ def run_batch_benchmark(
             "stall_detection": {
                 "enabled": True,
                 "window_sec": 1.5,
-                "min_displacement_m": 0.015,
-                "min_rotation_rad": 0.03
+                "min_displacement_m": 0.030,
+                "min_rotation_rad": 0.050,
+                "zero_cmd_steps": 15
             }
         },
         "iso_18646_metrics": iso_metrics if iso_metrics else {},
