@@ -113,6 +113,15 @@ def load_benchmark_trials(batch_dir: str) -> List[Dict[str, Any]]:
         csvs = glob.glob(os.path.join(batch_dir, "*.csv"))
         csvs = [c for c in csvs if "iso" not in os.path.basename(c).lower()]
 
+    if not csvs and os.path.isdir(os.path.join(batch_dir, "data")):
+        batch_dir = os.path.join(batch_dir, "data")
+        csvs = glob.glob(os.path.join(batch_dir, "run_*.csv"))
+        if not csvs:
+            csvs = glob.glob(os.path.join(batch_dir, "*session_*.csv"))
+        if not csvs:
+            csvs = glob.glob(os.path.join(batch_dir, "*.csv"))
+            csvs = [c for c in csvs if "iso" not in os.path.basename(c).lower()]
+
     csvs = sorted(csvs, key=natural_sort_key)
     trials = []
 
@@ -541,7 +550,7 @@ def plot_quadrants_online_style(
 # 4. REGENERATION DES TRACES DE SESSIONS INDIVIDUELLES (DataLogger 3x3)
 # ==============================================================================
 
-def regenerate_session_plots(batch_dir: str) -> None:
+def regenerate_session_plots(batch_dir: str, output_dir: Optional[str] = None) -> None:
     """Régénère pour chaque trace individuelle le plot session 3x3 conforme à DataLogger."""
     if not MATPLOTLIB_AVAILABLE:
         return
@@ -553,10 +562,13 @@ def regenerate_session_plots(batch_dir: str) -> None:
         except ImportError:
             from .data_logger import DataLogger
     csvs = sorted(glob.glob(os.path.join(batch_dir, "*.csv")), key=natural_sort_key)
+    out_dir = output_dir if output_dir else batch_dir
+    os.makedirs(out_dir, exist_ok=True)
     for path in csvs:
         if "iso_18646_metrics" in path:
             continue
-        png_path = os.path.splitext(path)[0] + ".png"
+        base_name = os.path.splitext(os.path.basename(path))[0]
+        png_path = os.path.join(out_dir, base_name + ".png")
         logger = DataLogger()
         with open(path, "r", encoding="utf-8") as f:
             for row in csv.DictReader(f):
@@ -934,7 +946,8 @@ def generate_html_online_style(
 def generate_all_evaluation_reports(
     batch_dir: str = "data/evaluation/batch_run",
     prefix: str = "benchmark",
-    regenerate_sessions: bool = True
+    regenerate_sessions: bool = True,
+    output_images_dir: Optional[str] = None
 ) -> None:
     """
     Génère la suite complète de graphiques rigoureusement conforme à APP-Limo-ros2 :
@@ -945,25 +958,33 @@ def generate_all_evaluation_reports(
     - <prefix>_trajectory.svg : Version vectorielle SVG pure
     - <prefix>_dashboard.html : Web viewer interactif
     """
+    if os.path.isdir(os.path.join(batch_dir, "data")) and not glob.glob(os.path.join(batch_dir, "run_*.csv")):
+        if output_images_dir is None and os.path.isdir(os.path.join(batch_dir, "images")):
+            output_images_dir = os.path.join(batch_dir, "images")
+        batch_dir = os.path.join(batch_dir, "data")
+
     trials = load_benchmark_trials(batch_dir)
     if not trials:
         print(f"[Visualizer] Aucun essai trouvé dans {batch_dir}.")
         return
 
     iso_metrics = compute_iso_from_trials(trials)
+    img_dir = output_images_dir if output_images_dir else batch_dir
+    os.makedirs(img_dir, exist_ok=True)
 
     print("\n" + "=" * 70)
     print("--- SUITE GRAPHIQUE COMPARATIVE 100% CONFORME ONLINE LEARNING ---")
     print(f"Dossier source   : {batch_dir}")
+    print(f"Dossier images   : {img_dir}")
     print(f"Nombre de traces : {len(trials)} sessions")
     print("=" * 70)
 
     # 1. Carte vectorielle SVG (standard Online Learning)
-    svg_path = os.path.join(batch_dir, f"{prefix}_trajectory.svg")
+    svg_path = os.path.join(img_dir, f"{prefix}_trajectory.svg")
     generate_svg_online_style(trials, svg_path, iso_metrics)
 
     # 2. Dashboard interactif HTML (standard Online Learning)
-    html_path = os.path.join(batch_dir, f"{prefix}_dashboard.html")
+    html_path = os.path.join(img_dir, f"{prefix}_dashboard.html")
     generate_html_online_style(trials, html_path, iso_metrics)
 
     # 3. Planches matplotlib PNG (si disponible)
@@ -971,24 +992,24 @@ def generate_all_evaluation_reports(
         # A. Régénération des planches 3x3 par session (exact DataLogger.save_plot)
         if regenerate_sessions:
             print("[Visualizer] Génération des graphiques par session (3x3 DataLogger)...")
-            regenerate_session_plots(batch_dir)
+            regenerate_session_plots(batch_dir, output_dir=img_dir)
 
         # B. Trajectoire complète — toutes sessions (<prefix>_trajectory.png)
-        traj_png = os.path.join(batch_dir, f"{prefix}_trajectory.png")
+        traj_png = os.path.join(img_dir, f"{prefix}_trajectory.png")
         plot_trajectory_summary_online_style(trials, traj_png, iso_metrics)
 
         # C. Dashboard complet 3x3 (<prefix>_all.png)
-        all_png = os.path.join(batch_dir, f"{prefix}_all.png")
+        all_png = os.path.join(img_dir, f"{prefix}_all.png")
         plot_all_dashboard_online_style(trials, all_png, iso_metrics)
 
         # D. Grille par quadrant (<prefix>_quadrants.png)
-        quad_png = os.path.join(batch_dir, f"{prefix}_quadrants.png")
+        quad_png = os.path.join(img_dir, f"{prefix}_quadrants.png")
         plot_quadrants_online_style(trials, quad_png)
 
         # E. Alias eval_final pour compatibilité maximale avec Yasser
         if prefix != "eval_final":
-            eval_traj_png = os.path.join(batch_dir, "eval_final_trajectory.png")
-            eval_all_png = os.path.join(batch_dir, "eval_final_all.png")
+            eval_traj_png = os.path.join(img_dir, "eval_final_trajectory.png")
+            eval_all_png = os.path.join(img_dir, "eval_final_all.png")
             plot_trajectory_summary_online_style(trials, eval_traj_png, iso_metrics)
             plot_all_dashboard_online_style(trials, eval_all_png, iso_metrics)
     else:
@@ -1004,8 +1025,14 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="Générateur de graphiques comparatifs 100% conforme Online Learning.")
     parser.add_argument("--dir", type=str, default="data/evaluation/batch_run", help="Dossier contenant les run_*.csv")
+    parser.add_argument("--images-dir", type=str, default=None, help="Dossier de sortie pour les graphiques")
     parser.add_argument("--prefix", type=str, default="benchmark", help="Préfixe des fichiers générés")
     parser.add_argument("--no-sessions", action="store_true", help="Ne pas régénérer les plots de session")
     args = parser.parse_args()
 
-    generate_all_evaluation_reports(args.dir, args.prefix, regenerate_sessions=not args.no_sessions)
+    generate_all_evaluation_reports(
+        batch_dir=args.dir,
+        prefix=args.prefix,
+        regenerate_sessions=not args.no_sessions,
+        output_images_dir=args.images_dir
+    )

@@ -23,7 +23,11 @@ import sys
 import time
 import math
 import csv
+import json
+import shutil
 import argparse
+import collections
+from datetime import datetime
 from typing import List, Dict, Any, Optional, Tuple
 # Inclusion automatique du dossier racine du projet dans sys.path
 _project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -124,6 +128,7 @@ def run_simulated_benchmark_run(
     target: list[float] = [0.0, 0.0, 0.0],
     max_duration: float = 60.0,
     output_dir: str = "data/evaluation/batch_run",
+    output_images_dir: Optional[str] = None,
     dist_tol: float = 0.20
 ) -> Dict[str, Any]:
     """Exécute un essai en simulation cinématique à 20 Hz en boucle fermée."""
@@ -136,6 +141,7 @@ def run_simulated_benchmark_run(
     x, y, th = x0, y0, th0
     success = False
     elapsed = 0.0
+    pos_history: collections.deque[Tuple[float, float, float, float]] = collections.deque(maxlen=30)
 
     for step in range(max_steps):
         elapsed = step * dt
@@ -163,6 +169,18 @@ def run_simulated_benchmark_run(
             success = True
             break
 
+        # Détection d'immobilisation (Stall Detection) : coupure anticipée dès que le robot s'arrête
+        pos_history.append((elapsed, x, y, th))
+        if elapsed > 1.5 and len(pos_history) >= 30:
+            old_t, old_x, old_y, old_th = pos_history[0]
+            d_moved = math.hypot(x - old_x, y - old_y)
+            d_rot = abs(recast_angle(th - old_th))
+            if d_moved < 0.015 and d_rot < 0.03:
+                print(f"    [Stall Détecté] Robô parou de se mover (deslocamento < 1.5cm em 1.5s a t={elapsed:.1f}s). Encerrando ensaio.")
+                if dist < dist_tol and abs(e_theta) < 0.35:
+                    success = True
+                break
+
         # Inférence neuronale
         cmd_raw = model([in_0, in_1, in_2])
         if hasattr(cmd_raw, "tolist"):
@@ -185,9 +203,12 @@ def run_simulated_benchmark_run(
 
     # Sauvegarde des traces CSV et tracés
     os.makedirs(output_dir, exist_ok=True)
+    img_dir = output_images_dir if output_images_dir else output_dir
+    os.makedirs(img_dir, exist_ok=True)
+
     slug = run_name.lower().replace(" ", "_").replace("-", "").replace("__", "_")
     csv_path = os.path.join(output_dir, f"{slug}.csv")
-    png_path = os.path.join(output_dir, f"{slug}.png")
+    png_path = os.path.join(img_dir, f"{slug}.png")
     logger.save(csv_path)
     logger.save_plot(png_path)
 
@@ -216,6 +237,7 @@ def run_gazebo_benchmark_run(
     target: List[float] = [0.0, 0.0, 0.0],
     max_duration: float = 60.0,
     output_dir: str = "data/evaluation/batch_run",
+    output_images_dir: Optional[str] = None,
     dist_tol: float = 0.25
 ) -> Dict[str, Any]:
     """Exécute un essai individuel sous Gazebo avec téléportation automatique."""
@@ -228,6 +250,7 @@ def run_gazebo_benchmark_run(
     start_time = time.time()
     dt = 0.050
     success = False
+    pos_history: collections.deque[Tuple[float, float, float, float]] = collections.deque(maxlen=30)
 
     while rclpy.ok():
         elapsed = time.time() - start_time
@@ -259,6 +282,18 @@ def run_gazebo_benchmark_run(
             success = True
             break
 
+        # Détection d'immobilisation (Stall Detection) : coupure anticipée dès que le robot s'arrête
+        pos_history.append((elapsed, pos[0], pos[1], pos[2]))
+        if elapsed > 1.5 and len(pos_history) >= 30:
+            old_t, old_x, old_y, old_th = pos_history[0]
+            d_moved = math.hypot(pos[0] - old_x, pos[1] - old_y)
+            d_rot = abs(recast_angle(pos[2] - old_th))
+            if d_moved < 0.015 and d_rot < 0.03:
+                print(f"    [Stall Détecté] Robô parou de se mover (deslocamento < 1.5cm em 1.5s a t={elapsed:.1f}s). Encerrando ensaio.")
+                if dist < dist_tol and abs(e_theta) < 0.35:
+                    success = True
+                break
+
         cmd_raw = model([in_0, in_1, in_2])
         if hasattr(cmd_raw, "tolist"):
             cmd = cmd_raw.tolist()
@@ -276,9 +311,12 @@ def run_gazebo_benchmark_run(
     time.sleep(0.1)
 
     os.makedirs(output_dir, exist_ok=True)
+    img_dir = output_images_dir if output_images_dir else output_dir
+    os.makedirs(img_dir, exist_ok=True)
+
     slug = run_name.lower().replace(" ", "_").replace("-", "").replace("__", "_")
     csv_path = os.path.join(output_dir, f"{slug}.csv")
-    png_path = os.path.join(output_dir, f"{slug}.png")
+    png_path = os.path.join(img_dir, f"{slug}.png")
     logger.save(csv_path)
     logger.save_plot(png_path)
 
@@ -294,15 +332,28 @@ def run_gazebo_benchmark_run(
         "err_theta": abs(recast_angle(final_pos[2] - target[2])),
     }
 
-
 def run_batch_benchmark(
     weights_path: str = "models/supervised_w_torch_diff.json",
-    output_dir: str = "data/evaluation/batch_run",
+    output_dir: Optional[str] = None,
     use_gazebo: bool = False,
     suite: str = "extended"
-) -> None:
+) -> Dict[str, Any]:
     """Exécute l'ensemble des scénarios de test et synthétise les métriques ISO 18646-2."""
     scenarios = EXTENDED_TEST_SCENARIOS if suite == "extended" else CANONICAL_TEST_SCENARIOS
+
+    now = datetime.now()
+    timestamp_folder = now.strftime("test_%Y_%m_%d_%S_%M_%H")
+
+    if output_dir and os.path.basename(os.path.normpath(output_dir)).startswith("test_"):
+        test_dir = output_dir
+    else:
+        base_eval_dir = output_dir if (output_dir and output_dir != "data/evaluation/batch_run") else "data/evaluation"
+        test_dir = os.path.join(base_eval_dir, timestamp_folder)
+
+    data_dir = os.path.join(test_dir, "data")
+    images_dir = os.path.join(test_dir, "images")
+    os.makedirs(data_dir, exist_ok=True)
+    os.makedirs(images_dir, exist_ok=True)
 
     print("\n" + "=" * 76)
     print("      LIMO OFFLINE LEARNING : BANC D'ESSAI AUTOMATISÉ ISO 18646-2")
@@ -311,7 +362,9 @@ def run_batch_benchmark(
     print(f"Mode d'exécution    : {'Gazebo (ROS 2)' if use_gazebo else 'Simulation Cinématique (20 Hz)'}")
     print(f"Desnormalização     : V_MAX = {V_MAX:.2f} m/s | W_MAX = {W_MAX:.2f} rad/s")
     print(f"Suite d'essais      : {suite.upper()} ({len(scenarios)} scénarios multi-distances/orientations)")
-    print(f"Dossier de sortie   : {output_dir}")
+    print(f"Dossier du test     : {test_dir}")
+    print(f"  ├── Données CSV   : {data_dir}")
+    print(f"  └── Graphiques    : {images_dir}")
     print("=" * 76)
 
     # 1. Chargement du modèle neural
@@ -337,7 +390,8 @@ def run_batch_benchmark(
                         x0=x0, y0=y0, th0=th0,
                         run_name=f"Run_{idx}_Q{quad}",
                         target=[0.0, 0.0, 0.0],
-                        output_dir=output_dir
+                        output_dir=data_dir,
+                        output_images_dir=images_dir
                     )
                     results.append(res)
                     time.sleep(0.5)
@@ -359,13 +413,14 @@ def run_batch_benchmark(
                 x0=x0, y0=y0, th0=th0,
                 run_name=f"Run_{idx}_Q{quad}",
                 target=[0.0, 0.0, 0.0],
-                output_dir=output_dir
+                output_dir=data_dir,
+                output_images_dir=images_dir
             )
             results.append(res)
 
     if not results:
         print("Aucun essai complété.")
-        return
+        return {}
 
     # 3. Calcul des métriques ISO 18646-2
     trials_for_iso = [{"xf": r["xf"], "yf": r["yf"], "thf": r["thf"]} for r in results]
@@ -384,8 +439,8 @@ def run_batch_benchmark(
         print(f"  • Écart-type angulaire (So)       : {iso_metrics['So_deg']:.2f}°")
         print(f"  • Barycentre atteint (X, Y)       : ({iso_metrics['x_bar']:.4f}, {iso_metrics['y_bar']:.4f}) m")
 
-        # Sauvegarde du rapport CSV consolidé
-        iso_csv_path = os.path.join(output_dir, "iso_18646_metrics.csv")
+        # Sauvegarde du rapport CSV consolidé dans data/
+        iso_csv_path = os.path.join(data_dir, "iso_18646_metrics.csv")
         with open(iso_csv_path, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
             writer.writerow(["Métrique ISO 18646-2", "Valeur", "Unité", "Statut"])
@@ -397,20 +452,97 @@ def run_batch_benchmark(
             writer.writerow(["Écart-type angulaire (So)", f"{iso_metrics['So_deg']:.2f}", "deg", "OK"])
         print(f"\nRapport ISO exporté dans : {iso_csv_path}")
 
-        # 4. Génération de la suite graphique unifiée comparative
+        # 4. Génération de la suite graphique unifiée comparative dans images/
         try:
             from src.evaluation.benchmark_visualizer import generate_all_evaluation_reports
-            generate_all_evaluation_reports(output_dir)
+            generate_all_evaluation_reports(
+                batch_dir=data_dir,
+                prefix="benchmark",
+                regenerate_sessions=False,
+                output_images_dir=images_dir
+            )
         except Exception as e:
             print(f"[Visualizer] Note : Erreur lors de la génération graphique : {e}")
 
+        # Espelhamento para compatibilidade com scripts legados
+        try:
+            legacy_dir = "data/evaluation/batch_run"
+            os.makedirs(legacy_dir, exist_ok=True)
+            shutil.copy2(iso_csv_path, os.path.join(legacy_dir, "iso_18646_metrics.csv"))
+            for fn in os.listdir(data_dir):
+                shutil.copy2(os.path.join(data_dir, fn), os.path.join(legacy_dir, fn))
+            for fn in os.listdir(images_dir):
+                shutil.copy2(os.path.join(images_dir, fn), os.path.join(legacy_dir, fn))
+        except Exception:
+            pass
+
+    # 5. Sauvegarde de params.json dans test_yyyy_mm_dd_sec_min_hr
+    successful_runs = sum(1 for r in results if r["success"])
+    params = {
+        "test_id": timestamp_folder,
+        "timestamp": now.strftime("%Y-%m-%d %H:%M:%S"),
+        "weights_path": os.path.abspath(weights_path),
+        "execution_mode": "Gazebo (ROS 2)" if use_gazebo else "Simulation Cinématique (20 Hz)",
+        "suite": suite,
+        "total_runs": len(results),
+        "successful_runs": successful_runs,
+        "success_rate_pct": round(100.0 * successful_runs / max(1, len(results)), 2),
+        "average_elapsed_sec": round(sum(r["elapsed"] for r in results) / max(1, len(results)), 2),
+        "kinematic_limits": {
+            "v_max_mps": V_MAX,
+            "w_max_radps": W_MAX,
+            "x_max_m": X_MAX,
+            "y_max_m": Y_MAX,
+            "alpha": ALPHA,
+            "dt_sec": 0.05,
+            "dist_tol_m": 0.20 if not use_gazebo else 0.25,
+            "angle_tol_rad": 0.35,
+            "stall_detection": {
+                "enabled": True,
+                "window_sec": 1.5,
+                "min_displacement_m": 0.015,
+                "min_rotation_rad": 0.03
+            }
+        },
+        "iso_18646_metrics": iso_metrics if iso_metrics else {},
+        "scenarios": [
+            {"name": s[0], "x0": s[1], "y0": s[2], "th0": s[3], "quadrant": s[4]}
+            for s in scenarios
+        ],
+        "runs_summary": [
+            {
+                "name": r["name"],
+                "success": r["success"],
+                "elapsed_sec": round(r["elapsed"], 3),
+                "final_pose": [round(r["xf"], 4), round(r["yf"], 4), round(r["thf"], 4)],
+                "err_dist_m": round(r["err_dist"], 4),
+                "err_theta_deg": round(math.degrees(r["err_theta"]), 2)
+            }
+            for r in results
+        ],
+        "artifacts": {
+            "test_dir": os.path.abspath(test_dir),
+            "params_json": os.path.abspath(os.path.join(test_dir, "params.json")),
+            "data_dir": os.path.abspath(data_dir),
+            "images_dir": os.path.abspath(images_dir),
+            "iso_csv": os.path.abspath(os.path.join(data_dir, "iso_18646_metrics.csv")),
+            "trajectory_plot": os.path.abspath(os.path.join(images_dir, "benchmark_trajectory.png")),
+            "dashboard_html": os.path.abspath(os.path.join(images_dir, "benchmark_dashboard.html"))
+        }
+    }
+    params_path = os.path.join(test_dir, "params.json")
+    with open(params_path, "w", encoding="utf-8") as f:
+        json.dump(params, f, indent=2, ensure_ascii=False)
+    print(f"[Sucesso] Parâmetros e metadados do teste salvos em: {params_path}")
+
     print("=" * 76 + "\n")
+    return params
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Banc d'essai automatisé ISO 18646-2 pour LIMO.")
     parser.add_argument("--weights", "--model", dest="weights", type=str, default="models/supervised_w_torch_diff.json", help="Chemin du JSON des poids")
-    parser.add_argument("--outdir", type=str, default="data/evaluation/batch_run", help="Dossier de sortie des métriques")
+    parser.add_argument("--outdir", type=str, default="data/evaluation", help="Dossier de sortie des métriques")
     parser.add_argument("--suite", type=str, default="extended", choices=["extended", "canonical"], help="Suite d'essais (extended: 20 essais, canonical: 8 essais)")
     parser.add_argument("--gazebo", action="store_true", help="Force l'exécution dans Gazebo via ROS 2")
     parser.add_argument("--sim", action="store_true", help="Force le mode Simulation Cinématique pure")

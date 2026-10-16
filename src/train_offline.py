@@ -13,6 +13,8 @@ import csv
 import json
 import time
 import math
+import shutil
+from datetime import datetime
 from typing import Tuple, List, Dict, Any
 
 # Auto-detecção segura de pacotes: APENAS inclui a pasta se a versão do Python for IDÊNTICA
@@ -507,20 +509,78 @@ def train_offline(
     try:
         alt_path = os.path.join(os.path.dirname(weights_output_path), "pioneer_model_weights.json")
         if os.path.abspath(weights_output_path) != os.path.abspath(alt_path):
-            import shutil
             shutil.copy2(weights_output_path, alt_path)
             print(f"[Sucesso] Cópia sincronizada em: {alt_path}")
     except Exception:
         pass
     print(f"[Sucesso] Histórico salvo em : {history_output_path}")
 
-    # Gerar automaticamente a curva de convergência
+    # Organização em pasta timestamped: models/training_yyyy_mm_dd_sec_min_hr
+    now = datetime.now()
+    timestamp_folder = now.strftime("training_%Y_%m_%d_%S_%M_%H")
+    models_dir = os.path.dirname(weights_output_path) or "models"
+    training_dir = os.path.join(models_dir, timestamp_folder)
+    os.makedirs(training_dir, exist_ok=True)
+
+    # 1. Copia os pesos e o histórico para a pasta do treinamento
+    train_weights_pioneer = os.path.join(training_dir, "pioneer_model_weights.json")
+    train_weights_diff = os.path.join(training_dir, "supervised_w_torch_diff.json")
+    train_history = os.path.join(training_dir, "training_history.json")
+    shutil.copy2(weights_output_path, train_weights_pioneer)
+    shutil.copy2(weights_output_path, train_weights_diff)
+    shutil.copy2(history_output_path, train_history)
+
+    # 2. Gera os gráficos de treino diretamente dentro da pasta do treinamento
     try:
         from src.plot_curves import plot_training_history
+        plot_training_history(train_history, output_dir=training_dir)
+        print(f"[Sucesso] Gráficos de treino salvos em: {training_dir}")
         plot_training_history(history_output_path, output_dir="data/evaluation")
-        print("[Sucesso] Curvas de treino (PNG e SVG) atualizadas em data/evaluation/")
     except Exception as e:
-        print(f"[Aviso] Curvas não foram plotadas automaticamente: {e}")
+        print(f"[Aviso] Curvas não puderam ser plotadas: {e}")
+
+    best_vloss = result.get("best_val_loss", 0.0)
+    history_dict = result.get("history", {})
+    train_hist = history_dict.get("train_loss", [])
+    val_hist = history_dict.get("val_loss", [])
+    train_params = {
+        "training_id": timestamp_folder,
+        "timestamp": now.strftime("%Y-%m-%d %H:%M:%S"),
+        "dataset_path": os.path.abspath(dataset_path),
+        "total_samples": len(inputs),
+        "train_samples": len(inputs) - int(0.2 * len(inputs)),
+        "val_samples": int(0.2 * len(inputs)),
+        "epochs": epochs,
+        "batch_size": batch_size,
+        "learning_rate": effective_lr,
+        "optimizer": "AdamW (Adaptativo)" if use_adamw else "SGD Puro (Taxa Constante)",
+        "use_adamw": use_adamw,
+        "weight_decay": weight_decay if use_adamw else 0.0,
+        "scheduler": "ReduceLROnPlateau" if (use_adamw and use_scheduler) else "Taxa Fixa Constante",
+        "beta": beta,
+        "hidden_size": hidden_size,
+        "use_bias": USE_BIAS,
+        "v_max": V_MAX,
+        "w_max": W_MAX,
+        "x_max": X_MAX,
+        "y_max": Y_MAX,
+        "best_val_loss": round(float(best_vloss), 6),
+        "final_train_loss": round(float(train_hist[-1]), 6) if train_hist else None,
+        "final_val_loss": round(float(val_hist[-1]), 6) if val_hist else None,
+        "artifacts": {
+            "folder": training_dir,
+            "weights_pioneer": train_weights_pioneer,
+            "weights_torch": train_weights_diff,
+            "history_json": train_history,
+            "curves_png": os.path.join(training_dir, "training_curves.png"),
+            "curves_svg": os.path.join(training_dir, "training_curves.svg"),
+            "params_json": os.path.join(training_dir, "training_params.json")
+        }
+    }
+    train_params_path = os.path.join(training_dir, "training_params.json")
+    with open(train_params_path, "w", encoding="utf-8") as f:
+        json.dump(train_params, f, indent=2, ensure_ascii=False)
+    print(f"[Sucesso] Dados e parâmetros do treino salvos em: {train_params_path}")
 
     return result
 

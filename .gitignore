@@ -48,6 +48,7 @@ docs/images/
 res/
 *.log
 models/**/training_history.json
+models/training_*/
 
 # Study documents and experimental scripts (local research only)
 docs/EXPLICATION_PERTE_MSE.md

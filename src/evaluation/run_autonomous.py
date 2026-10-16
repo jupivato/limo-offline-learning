@@ -19,7 +19,11 @@ import os
 import sys
 import time
 import math
+import json
+import shutil
 import argparse
+import collections
+from datetime import datetime
 from typing import List, Optional, Dict, Any, Tuple
 
 # Inclusion automatique du dossier racine du projet dans sys.path
@@ -134,6 +138,7 @@ def run_autonomous_session(
     success = False
     start_time = time.time()
     dt = 0.050  # Période de 20 Hz
+    pos_history: collections.deque[Tuple[float, float, float, float]] = collections.deque(maxlen=30)
 
     try:
         while rclpy.ok():
@@ -169,6 +174,18 @@ def run_autonomous_session(
                 success = True
                 break
 
+            # Détection d'immobilisation (Stall Detection) : coupure anticipée dès que le robot s'arrête
+            pos_history.append((elapsed, pos[0], pos[1], pos[2]))
+            if elapsed > 1.5 and len(pos_history) >= 30:
+                old_t, old_x, old_y, old_th = pos_history[0]
+                d_moved = math.hypot(pos[0] - old_x, pos[1] - old_y)
+                d_rot = abs(recast_angle(pos[2] - old_th))
+                if d_moved < 0.015 and d_rot < 0.03:
+                    print(f"\n[Stall Détecté] O robô parou de se mover (deslocamento < 1.5cm em 1.5s a t={elapsed:.1f}s). Encerrando missão imediatamente.")
+                    if dist < dist_tol and abs(e_theta) < 0.35:
+                        success = True
+                    break
+
             # Inférence par la politique neuronale
             cmd_raw = model([in_0, in_1, in_2])
             if hasattr(cmd_raw, "tolist"):
@@ -188,13 +205,84 @@ def run_autonomous_session(
         print("\nInterruption opérateur reçue.")
     finally:
         robot.stop()
-        stamp = time.strftime("%Y%m%d_%H%M%S")
+        now = datetime.now()
+        timestamp_folder = now.strftime("test_%Y_%m_%d_%S_%M_%H")
+
+        if output_dir and os.path.basename(os.path.normpath(output_dir)).startswith("test_"):
+            test_dir = output_dir
+        else:
+            base_eval_dir = output_dir if output_dir else "data/evaluation"
+            test_dir = os.path.join(base_eval_dir, timestamp_folder)
+
+        data_dir = os.path.join(test_dir, "data")
+        images_dir = os.path.join(test_dir, "images")
+        os.makedirs(data_dir, exist_ok=True)
+        os.makedirs(images_dir, exist_ok=True)
+
         prefix = "eval_success" if success else "eval_stop"
-        csv_path = os.path.join(output_dir, f"{prefix}_{stamp}.csv")
-        png_path = os.path.join(output_dir, f"{prefix}_{stamp}.png")
+        csv_path = os.path.join(data_dir, f"{prefix}.csv")
+        png_path = os.path.join(images_dir, f"{prefix}.png")
 
         logger.save(csv_path)
         logger.save_plot(png_path)
+
+        # Legacy copy to base output_dir for convenience
+        stamp = now.strftime("%Y%m%d_%H%M%S")
+        try:
+            legacy_csv = os.path.join(output_dir, f"{prefix}_{stamp}.csv")
+            legacy_png = os.path.join(output_dir, f"{prefix}_{stamp}.png")
+            shutil.copy2(csv_path, legacy_csv)
+            shutil.copy2(png_path, legacy_png)
+        except Exception:
+            pass
+
+        final_pos = robot.get_position() if hasattr(robot, "get_position") else [0.0, 0.0, 0.0]
+        elapsed_sec = time.time() - start_time
+        err_dist = math.hypot(final_pos[0] - target[0], final_pos[1] - target[1])
+        err_theta = abs(recast_angle(final_pos[2] - target[2]))
+
+        params = {
+            "test_id": timestamp_folder,
+            "timestamp": now.strftime("%Y-%m-%d %H:%M:%S"),
+            "weights_path": os.path.abspath(weights_path),
+            "platform": "Robot Physique" if is_real else "Simulateur Gazebo",
+            "target": target,
+            "start_pose": teleport_to,
+            "final_position": [round(float(p), 4) for p in final_pos],
+            "success": success,
+            "elapsed_seconds": round(elapsed_sec, 3),
+            "max_duration_seconds": max_duration,
+            "error_distance_m": round(err_dist, 4),
+            "error_theta_deg": round(math.degrees(err_theta), 2),
+            "kinematics": {
+                "v_max_mps": V_MAX,
+                "w_max_radps": W_MAX,
+                "x_max_m": X_MAX,
+                "y_max_m": Y_MAX,
+                "alpha": ALPHA,
+                "dt_sec": dt,
+                "dist_tol_m": dist_tol,
+                "angle_tol_rad": 0.35,
+                "stall_detection": {
+                    "enabled": True,
+                    "window_sec": 1.5,
+                    "min_displacement_m": 0.015,
+                    "min_rotation_rad": 0.03
+                }
+            },
+            "artifacts": {
+                "folder": os.path.abspath(test_dir),
+                "params_json": os.path.abspath(os.path.join(test_dir, "params.json")),
+                "data_dir": os.path.abspath(data_dir),
+                "images_dir": os.path.abspath(images_dir),
+                "csv_path": os.path.abspath(csv_path),
+                "png_path": os.path.abspath(png_path)
+            }
+        }
+        params_path = os.path.join(test_dir, "params.json")
+        with open(params_path, "w", encoding="utf-8") as f:
+            json.dump(params, f, indent=2, ensure_ascii=False)
+        print(f"[Sucesso] Parâmetros e metadados da missão salvos em: {params_path}")
 
         robot.cleanup()
         rclpy.shutdown()

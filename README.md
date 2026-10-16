@@ -58,13 +58,16 @@ limo-offline-learning/
 ├── config/
 │   └── config.json                      # Spatial bounds, kinematic limits, & normalization
 ├── data/
-│   └── dataset.csv                      # Canonical offline dataset (62,524 discrete samples)
+│   ├── dataset.csv                      # Canonical offline dataset (62,524 discrete samples)
+│   └── evaluation/                      # Evaluation telemetry & ISO benchmarks (git-ignored)
+│       └── test_yyyy_mm_dd_sec_min_hr/  # Timestamped test runs (params.json, data/, images/)
 ├── docs/
 │   ├── KINEMATICS_AND_NORMALIZATION_SPECIFICATION.md # Mathematical derivations & limits
 │   └── TUTORIAL_GAZEBO.md               # Complete Gazebo 3D simulation guide
 ├── models/
 │   ├── pioneer_model_weights.json       # Trained neural weights (JSON format)
-│   └── supervised_w_torch_diff.json     # Synced weights mirror
+│   ├── supervised_w_torch_diff.json     # Synced weights mirror
+│   └── training_yyyy_mm_dd_sec_min_hr/  # Timestamped training runs (params, weights, curves)
 ├── src/
 │   ├── generate_dataset.py              # Robot-centric discrete dataset generator
 │   ├── train_offline.py                 # Offline training pipeline (PioneerNN)
@@ -173,17 +176,20 @@ python3 src/plot_curves.py
 
 ### 5. Closed-Loop Evaluation & Benchmarking
 
-#### Single Scenario Execution:
+#### Single Scenario Execution (Gazebo 3D):
 ```bash
 python3 src/evaluation/run_autonomous.py \
-    --weights models/supervised_w_torch_diff.json \
-    --x-target 0.0 --y-target 0.0 --theta-target 0.0
+    --weights models/pioneer_model_weights.json \
+    --teleport-to 2.0 2.0 0.0 \
+    --target 0.0 0.0 0.0
 ```
 
-#### Batch Benchmarking (Canonical Scenarios under ISO 18646-2):
+#### Batch Benchmarking (20 Scenarios in Gazebo under ISO 18646-2):
 ```bash
 python3 src/evaluation/run_batch_benchmark.py \
-    --weights models/supervised_w_torch_diff.json \
+    --gazebo \
+    --suite extended \
+    --weights models/pioneer_model_weights.json \
     --outdir data/evaluation/batch_run
 ```
 
