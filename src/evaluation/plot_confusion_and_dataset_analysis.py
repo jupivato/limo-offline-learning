@@ -42,7 +42,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-from src.core.pioneer_nn import PioneerNN
+from src.core.pioneer_nn import PioneerNN, compute_k_theta
 
 plt.rcParams['font.sans-serif'] = 'DejaVu Sans'
 plt.rcParams['font.family'] = 'sans-serif'
@@ -70,7 +70,7 @@ Y_MAX = 5.0   # Limite da arena em Y (m)
 def load_dataset_and_predict(dataset_path: str, weights_path: str):
     """Carrega dados, executa inferência e retorna alvos e predições normalizadas."""
     print(f"1. Carregando modelo : {weights_path}")
-    model = PioneerNN(input_size=3, hidden_size=1000, output_size=2, use_bias=False)
+    model = PioneerNN(input_size=4, hidden_size=1000, output_size=2, use_bias=False)
     model.load_from_json_file(weights_path)
     model.eval()
 
@@ -96,10 +96,16 @@ def load_dataset_and_predict(dataset_path: str, weights_path: str):
                 in_1 = max(-1.0, min(1.0, yr / Y_MAX))
                 in_2 = max(-1.0, min(1.0, thr_norm / math.pi))
 
+                if "k_theta" in row and row["k_theta"] != "":
+                    k_th = float(row["k_theta"])
+                else:
+                    k_th = compute_k_theta(xr, yr)
+                k_th = max(0.1, min(1.0, float(k_th)))
+
                 norm_v = max(-1.0, min(1.0, raw_v / V_MAX))
                 norm_w = max(-1.0, min(1.0, raw_w / W_MAX))
 
-                inputs.append([in_0, in_1, in_2])
+                inputs.append([in_0, in_1, in_2, k_th])
                 targets_v.append(norm_v)
                 targets_w.append(norm_w)
                 coords_x.append(xr)

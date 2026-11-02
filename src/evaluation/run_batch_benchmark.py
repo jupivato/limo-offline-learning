@@ -45,7 +45,7 @@ for _p in [
     if os.path.exists(_p) and _p not in sys.path:
         sys.path.insert(0, _p)
 
-from src.core.pioneer_nn import PioneerNN
+from src.core.pioneer_nn import PioneerNN, compute_k_theta, compute_theta_strategic
 from src.evaluation.data_logger import DataLogger
 from calculus.calculate_iso_metrics import compute_iso_18646_metrics
 
@@ -161,6 +161,7 @@ def run_simulated_benchmark_run(
         in_0 = max(-1.0, min(1.0, x_target_robot / X_MAX))
         in_1 = max(-1.0, min(1.0, y_target_robot / Y_MAX))
         in_2 = max(-1.0, min(1.0, theta_robot_abs / math.pi))
+        k_theta = compute_k_theta(x_target_robot, y_target_robot)
 
         cost = in_0 ** 2 + in_1 ** 2 + in_2 ** 2
 
@@ -182,8 +183,8 @@ def run_simulated_benchmark_run(
                     success = True
                 break
 
-        # Inférence neuronale
-        cmd_raw = model([in_0, in_1, in_2])
+        # Inférence neuronale avec K_theta
+        cmd_raw = model([in_0, in_1, in_2, k_theta])
         if hasattr(cmd_raw, "tolist"):
             cmd = cmd_raw.tolist()
         else:
@@ -191,6 +192,17 @@ def run_simulated_benchmark_run(
 
         v_cmd = max(-V_MAX, min(V_MAX, float(cmd[0]) * V_MAX))
         w_cmd = max(-W_MAX, min(W_MAX, float(cmd[1]) * W_MAX))
+
+        # Anti-órbita: se a meta estiver na lateral (|phi| > 60°), anula avanço linear para frente (v > 0)
+        # permitindo pivô puro no próprio eixo sem orbitar (mantém marcha à ré normal para baliza)
+        phi_target = math.atan2(y_target_robot, x_target_robot)
+        if abs(phi_target) > 1.05 and v_cmd > 0.0:
+            v_cmd = 0.0
+
+        # Trava da Zona de Frenagem / Doca: se o robô já está na doca (dist <= 0.20m),
+        # anula avanço linear para frente (v > 0) para que ele apenas pivote no próprio eixo sem escapar da vaga!
+        if dist <= 0.20 and v_cmd > 0.0:
+            v_cmd = 0.0
 
         # Arrêt immédiat si la politique commande l'arrêt persistant
         if abs(v_cmd) < 0.02 and abs(w_cmd) < 0.03:
@@ -288,6 +300,7 @@ def run_gazebo_benchmark_run(
         in_0 = max(-1.0, min(1.0, x_target_robot / X_MAX))
         in_1 = max(-1.0, min(1.0, y_target_robot / Y_MAX))
         in_2 = max(-1.0, min(1.0, theta_robot_abs / math.pi))
+        k_theta = compute_k_theta(x_target_robot, y_target_robot)
 
         cost = in_0 ** 2 + in_1 ** 2 + in_2 ** 2
 
@@ -308,7 +321,7 @@ def run_gazebo_benchmark_run(
                     success = True
                 break
 
-        cmd_raw = model([in_0, in_1, in_2])
+        cmd_raw = model([in_0, in_1, in_2, k_theta])
         if hasattr(cmd_raw, "tolist"):
             cmd = cmd_raw.tolist()
         else:
@@ -316,6 +329,17 @@ def run_gazebo_benchmark_run(
 
         v_cmd = max(-V_MAX, min(V_MAX, float(cmd[0]) * V_MAX))
         w_cmd = max(-W_MAX, min(W_MAX, float(cmd[1]) * W_MAX))
+
+        # Anti-órbita: se a meta estiver na lateral (|phi| > 60°), anula avanço linear para frente (v > 0)
+        # permitindo pivô puro no próprio eixo sem orbitar (mantém marcha à ré normal para baliza)
+        phi_target = math.atan2(y_target_robot, x_target_robot)
+        if abs(phi_target) > 1.05 and v_cmd > 0.0:
+            v_cmd = 0.0
+
+        # Trava da Zona de Frenagem / Doca: se o robô já está na doca (dist <= 0.20m),
+        # anula avanço linear para frente (v > 0) para que ele apenas pivote no próprio eixo sem escapar da vaga!
+        if dist <= 0.20 and v_cmd > 0.0:
+            v_cmd = 0.0
 
         # Arrêt immédiat si la politique commande l'arrêt persistant
         if abs(v_cmd) < 0.02 and abs(w_cmd) < 0.03:
@@ -395,7 +419,7 @@ def run_batch_benchmark(
     print("=" * 76)
 
     # 1. Chargement du modèle neural
-    model = PioneerNN(input_size=3, hidden_size=1000, output_size=2)
+    model = PioneerNN(input_size=4, hidden_size=1000, output_size=2)
     model.load_from_json_file(weights_path)
     model.eval()
 

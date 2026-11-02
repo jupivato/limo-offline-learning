@@ -1,7 +1,7 @@
 """
 Treinamento Offline por Clonagem Comportamental (Behavioral Cloning) — LIMO
 ==========================================================================
-Rede: PioneerNN (3 entradas -> 1000 neurônios ocultos Tanh -> 2 saídas Tanh)
+Rede: PioneerNN (4 entradas [in_0, in_1, in_2, K_theta] -> 1000 neurônios ocultos Tanh -> 2 saídas Tanh)
 Otimizador: SGD Puro com taxa de aprendizado estritamente constante.
 
 CERV / ENIB — Projet LIMO Offline Learning
@@ -50,15 +50,15 @@ except Exception:
     NUMPY_AVAILABLE = False
     np = None
 
-from src.core.pioneer_nn import PioneerNN
+from src.core.pioneer_nn import PioneerNN, compute_k_theta
 
 # ==============================================================================
 # ⚙️ CONFIGURAÇÕES GLOBAIS DE TREINAMENTO E DESNORMALIZAÇÃO (MODIFIQUE DIRETAMENTE AQUI)
 # ==============================================================================
 USE_ADAMW = False          # False = SGD Puro | True = AdamW (com agendador e weight decay automáticos)
-LEARNING_RATE = 0.5      # Taxa de aprendizado global (aplicada diretamente ao otimizador selecionado)
+LEARNING_RATE = 0.05      # Taxa de aprendizado global (aplicada diretamente ao otimizador selecionado)
 
-EPOCHS = 150               # Número total de épocas de treinamento
+EPOCHS = 500               # Número total de épocas de treinamento
 BATCH_SIZE = 256           # Tamanho do mini-lote (batch)
 BETA = 1.0                 # Peso da velocidade angular na perda: MSE(v) + beta * MSE(w)
 HIDDEN_SIZE = 1000         # Número de neurônios na camada oculta
@@ -97,7 +97,7 @@ class WeightedMSELoss(nn.Module if TORCH_AVAILABLE else object):
 
 
 def load_dataset_samples(csv_file_path: str) -> Tuple[List[List[float]], List[List[float]]]:
-    """Carrega o dataset CSV e normaliza entradas e saídas no intervalo [-1.0, +1.0]."""
+    """Carrega o dataset CSV e normaliza entradas [in_0, in_1, in_2, K_theta] e saídas [-1.0, +1.0]."""
     if not os.path.exists(csv_file_path):
         candidates = [
             os.path.join(_project_root, csv_file_path),
@@ -128,10 +128,17 @@ def load_dataset_samples(csv_file_path: str) -> Tuple[List[List[float]], List[Li
                 in_1 = max(-1.0, min(1.0, yr / Y_MAX))
                 in_2 = max(-1.0, min(1.0, thr_norm / math.pi))
 
+                # Calcul dynamique ou extraction du gain K_theta dans [0.1, 1.0]
+                if "k_theta" in row and row["k_theta"] != "":
+                    k_th = float(row["k_theta"])
+                else:
+                    k_th = compute_k_theta(xr, yr)
+                k_th = max(0.1, min(1.0, float(k_th)))
+
                 norm_v = max(-1.0, min(1.0, raw_v / V_MAX))
                 norm_w = max(-1.0, min(1.0, raw_w / W_MAX))
 
-                inputs.append([in_0, in_1, in_2])
+                inputs.append([in_0, in_1, in_2, k_th])
                 targets.append([norm_v, norm_w])
             except (KeyError, ValueError):
                 continue
@@ -179,7 +186,8 @@ def _train_with_torch(
     print(f"Amostras: {total_samples} no total (Treino: {train_size} | Validação: {val_size})\n")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = PioneerNN(input_size=3, hidden_size=hidden_size, output_size=2, use_bias=use_bias)
+    input_size = len(inputs[0]) if inputs else 4
+    model = PioneerNN(input_size=input_size, hidden_size=hidden_size, output_size=2, use_bias=use_bias)
     model.to(device)
 
     criterion = WeightedMSELoss(beta=beta)
@@ -304,9 +312,10 @@ def _train_with_numpy(
 
     print(f"Amostras: {total_len} no total (Treino: {train_len} | Validação: {len(X_val)})\n")
 
+    input_size = len(inputs[0]) if inputs else 4
     # Inicialização Xavier Uniforme
-    limit1 = math.sqrt(6.0 / (3 + hidden_size))
-    W1 = np.random.uniform(-limit1, limit1, (3, hidden_size)).astype(np.float32)
+    limit1 = math.sqrt(6.0 / (input_size + hidden_size))
+    W1 = np.random.uniform(-limit1, limit1, (input_size, hidden_size)).astype(np.float32)
     limit2 = math.sqrt(6.0 / (hidden_size + 2))
     W2 = np.random.uniform(-limit2, limit2, (hidden_size, 2)).astype(np.float32)
 
@@ -417,7 +426,7 @@ def _train_with_numpy(
     print(f"\nTreinamento concluído em {elapsed:.2f} s. Melhor perda de validação: {best_val_loss:.6f}")
 
     weights_json = {
-        "input_size": 3,
+        "input_size": input_size,
         "hidden_size": hidden_size,
         "output_size": 2,
         "use_bias": False,

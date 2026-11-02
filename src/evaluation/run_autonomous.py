@@ -54,7 +54,7 @@ try:
 except (ImportError, ModuleNotFoundError):
     ROS2_AVAILABLE = False
 
-from src.core.pioneer_nn import PioneerNN
+from src.core.pioneer_nn import PioneerNN, compute_k_theta, compute_theta_strategic
 from src.ros2.limo_interface import LimoROS2Interface
 from src.evaluation.data_logger import DataLogger
 
@@ -111,10 +111,10 @@ def run_autonomous_session(
     print("=" * 65 + "\n")
 
     # 1. Instanciation du modèle et chargement des poids
-    model = PioneerNN(input_size=3, hidden_size=1000, output_size=2)
+    model = PioneerNN(input_size=4, hidden_size=1000, output_size=2)
     model.load_from_json_file(weights_path)
     model.eval()  # Mode évaluation : aucun calcul de gradient
-    print(f"[PioneerNN] Poids chargés avec succès depuis : {weights_path}")
+    print(f"[PioneerNN] Modèle initialisé (4 entrées [in_0, in_1, in_2, K_θ]) | Poids chargés depuis : {weights_path}")
 
     # 2. Initialisation de ROS 2 et de l'interface robot
     rclpy.init()
@@ -165,6 +165,9 @@ def run_autonomous_session(
             in_1 = max(-1.0, min(1.0, y_target_robot / Y_MAX))
             in_2 = max(-1.0, min(1.0, theta_robot_abs / math.pi))
 
+            # Calcul dynamique du gain K_theta à partir de (x_R, y_R) dans le repère du robot
+            k_theta = compute_k_theta(x_target_robot, y_target_robot)
+
             # Valeur instantanée du coût quadratique normalisé
             cost = in_0 ** 2 + in_1 ** 2 + in_2 ** 2
 
@@ -187,8 +190,8 @@ def run_autonomous_session(
                         success = True
                     break
 
-            # Inférence par la politique neuronale
-            cmd_raw = model([in_0, in_1, in_2])
+            # Inférence par la politique neuronale étendue à 4 entrées [in_0, in_1, in_2, K_theta]
+            cmd_raw = model([in_0, in_1, in_2, k_theta])
             if hasattr(cmd_raw, "tolist"):
                 cmd = cmd_raw.tolist()
             else:
@@ -197,6 +200,21 @@ def run_autonomous_session(
             # Dénormalisation depuis [-1.0, +1.0] vers les vitesses physiques réelles
             v_cmd = max(-V_MAX, min(V_MAX, float(cmd[0]) * V_MAX))
             w_cmd = max(-W_MAX, min(W_MAX, float(cmd[1]) * W_MAX))
+
+            # Anti-órbita: se a meta estiver na lateral (|phi| > 60°), anula avanço linear para frente (v > 0)
+            # permitindo pivô puro no próprio eixo sem orbitar (mantém marcha à ré normal para baliza)
+            phi_target = math.atan2(y_target_robot, x_target_robot)
+            if abs(phi_target) > 1.05 and v_cmd > 0.0:
+                v_cmd = 0.0
+
+            # Trava da Zona de Frenagem / Doca: se o robô já está na doca (dist <= 0.20m),
+            # anula avanço linear para frente (v > 0) para que ele apenas pivote no próprio eixo sem escapar da vaga!
+            if dist <= 0.20 and v_cmd > 0.0:
+                v_cmd = 0.0
+
+            # Affichage console régulier pour faciliter le débogage (toutes les 0.5s / 10 itérations)
+            if int(elapsed / dt) % 10 == 0:
+                print(f"[Débogage K_θ] t={elapsed:5.2f}s | Repère Robot: x_R={x_target_robot:+6.2f}m, y_R={y_target_robot:+6.2f}m | K_θ={k_theta:6.4f} (∈ [0.1, 1.0]) | v_cmd={v_cmd:+5.2f}m/s, w_cmd={w_cmd:+5.2f}rad/s")
 
             # Arrêt immédiat si la politique commande l'arrêt persistant
             if abs(v_cmd) < 0.02 and abs(w_cmd) < 0.03:

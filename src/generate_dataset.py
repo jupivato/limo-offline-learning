@@ -1,27 +1,35 @@
 """
-LIMO Dataset Generator (Robot-Centric Relative Coordinates & Discrete Ternary Actions)
-========================================================================================
-Generates the offline learning dataset for the AgileX LIMO mobile robot under the
-canonical robot-relative reference frame:
+Gerador de Dataset de Aprendizado Offline Perfeitamente Equilibrado — AgileX LIMO (Norma ENIB)
+=============================================================================================
+Gera o conjunto de dados canônico com estritamente 5 COLUNAS para o aprendizado
+supervisionado offline (Behavioral Cloning) da rede PioneerNN.
 
-1. Inputs:
-   - x_target_robot : Target X coordinate in the robot's local body frame (m)
-   - y_target_robot : Target Y coordinate in the robot's local body frame (m)
-   - theta_robot    : Absolute robot heading in the global frame (rad) [-pi, +pi]
+Esquema de 5 Colunas (Robot-Centric Relative Mapping):
+1. x_target_robot : Coordenada X da doca no referencial do robô (m)
+2. y_target_robot : Coordenada Y da doca no referencial do robô (m)
+3. theta_robot    : Orientação absoluta do robô no referencial global (rad) [-pi, +pi]
+4. v_robot        : Consigne de velocidade linear {-V_MAX, 0.0, +V_MAX} (m/s)
+5. w_robot        : Consigne de velocidade angular {-W_MAX, 0.0, +W_MAX} (rad/s)
 
-2. Outputs (Discrete Ternary Actions):
-   - v_robot : Linear velocity command in {-V_MAX, 0.0, +V_MAX} (m/s)
-   - w_robot : Angular velocity command in {-W_MAX, 0.0, +W_MAX} (rad/s)
+Estrutura das 9 Manobras Canônicas da ENIB (Prof. Patrick Hénaff):
+- Classe 1: Avanço Retilíneo Puro (v > 0, w = 0)
+- Classe 2: Ré Retilínea Pura (v < 0, w = 0)
+- Classe 3: Rotação Pura Anti-horária / Pivô Esquerda (v = 0, w > 0)
+- Classe 4: Rotação Pura Horária / Pivô Direita (v = 0, w < 0)
+- Classe 5: Curva Suave Frente-Esquerda (v > 0, w > 0)
+- Classe 6: Curva Suave Frente-Direita (v > 0, w < 0)
+- Classe 7: Curva Ré-Esquerda / Baliza (v < 0, w < 0)
+- Classe 8: Curva Ré-Direita / Baliza (v < 0, w > 0)
+- Classe 9: Atracação e Estabilização Final / Stop (v = 0, w = 0)
 
-3. Spatial Domain & Grid:
-   - x_max = 5.0 m, y_max = 5.0 m
-   - Regular grid: -x_max <= x_target <= x_max with step 0.5 m
-   - Regular grid: -y_max <= y_target <= y_max with step 0.5 m
-   - Absolute heading: -pi <= theta_robot <= pi
-   - High-density terminal docking subgrid around (0, 0) for precise braking (d <= 0.20 m)
-   - Closed-loop dynamic rollouts at 20 Hz (dt = 0.05 s)
+Equilíbrio Perfeito e Justo (11,11% para cada uma das 9 manobras):
+- Amostragem com passo espacial frequente e constante: STEP_XY = 0.20 m (-5.0m a +5.0m).
+- Amostragem angular frequente e constante: 24 orientações discretas a cada 15° (passo pi/12 rad).
+- Réplicas exatas de ancoragem terminal na doca: (0.0, 0.0, 0.0) -> (0.0, 0.0) [Classe 9].
+- Balanceamento estratificado determinístico: exatamente 5.000 amostras para cada uma das 9 classes
+  (Total: 45.000 amostras, 11,11% cada, com simetria bilateral exata).
 
-Project: LIMO Offline Learning (CERV / ENIB)
+Projeto: LIMO Offline Learning (CERV / Lab-STICC / ENIB)
 """
 
 from __future__ import annotations
@@ -30,46 +38,86 @@ import os
 import sys
 import csv
 import math
+import random
 import argparse
 from typing import List, Dict, Any, Tuple
 
-# Project root path resolution
+# Resolução de caminho da raiz do projeto
 _project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
 # ==============================================================================
-# ⚙️ CONFIGURAÇÕES GLOBAIS DE GERAÇÃO DO DATASET (MODIFIQUE DIRETAMENTE AQUI)
+# ⚙️ PARÂMETROS CINEMÁTICOS E ESPACIAIS DA GRADE REGULAR
 # ==============================================================================
 V_MAX = 0.50                   # Velocidade linear máxima em m/s {-V_MAX, 0.0, +V_MAX}
 W_MAX = 1.00                   # Velocidade angular máxima em rad/s {-W_MAX, 0.0, +W_MAX}
-X_MAX = 5.0                    # Limite da arena em X [-X_MAX, +X_MAX] (m)
-Y_MAX = 5.0                    # Limite da arena em Y [-Y_MAX, +Y_MAX] (m)
-STEP_XY = 0.2                # Resolução da grade espacial (m): de 0.25 em 0.25m
-NUM_ANGLES = 24                # 24 ângulos discretos a cada 15 graus (passo de pi/12 rad)
+X_MAX = 5.0                    # Limite da arena em X [-5.0, +5.0] m
+Y_MAX = 5.0                    # Limite da arena em Y [-5.0, +5.0] m
+STEP_XY = 0.20                 # Passo frequente e constante de amostragem espacial (m)
+NUM_ANGLES = 24                # Passo frequente de amostragem angular: 24 direções a cada 15° (pi/12 rad)
 
-# Reforço de Parada na Doca: (x=0, y=0, theta=0) -> (v=0, w=0)
-NUM_DOCK_REINFORCEMENTS = 100  # Quantidade de réplicas da pose (0,0,0) parada para ancorar na rede
+STEER_DEADBAND = 0.26          # Margem angular para avanço retilíneo puro (~14.9°)
+REVERSE_DEADBAND = 0.28        # Margem de visada angular para ré retilínea pura (~16.0°)
+D_STOP = 0.15                  # Raio de doca para atracação e parada (m)
+D_STOP_ANGLE_TOL = 0.35        # Tolerância angular para atracação final (~20°, compatível com run_autonomous)
+D_BRAKE = 0.30                 # Distância de frenagem e desaceleração antes do cais (m)
+MAX_PIVOT_PHI = 1.35           # Ângulo lateral a partir do qual executa pivô no próprio eixo (~77.3°)
 
-# Filtros e Modos de Geração
-PURE_GRID_ONLY = True          # True = Apenas grade pura (sem valores decimais quebrados nem rollouts)
-INCLUDE_DOCK_SUBGRID = False   # True = Inclui sub-grade fina (0.05m) | False = Mantém apenas múltiplos de 0.5m
-INCLUDE_ROLLOUTS = False       # True = Inclui trajetórias dinâmicas contínuas | False = Sem números quebrados
+SAMPLES_PER_CLASS = 5000       # Cota exata e justa por classe (5.000 x 9 = 45.000 amostras, 11,11% cada)
 
-D_BRAKE = 0.20                 # Distância de frenagem (m)
-D_STOP = 0.05                  # Zona morta de parada final (m)
-DT = 0.050                     # Período de controle 20 Hz (s)
-
+# ESQUEMA RESTRITO A EXATAMENTE 5 COLUNAS (Sem colunas extras)
 COLUMNS = ["x_target_robot", "y_target_robot", "theta_robot", "v_robot", "w_robot"]
-# ==============================================================================
+
+# Nomenclatura das 9 manobras da ENIB para auditoria e relatório estatístico
+ENIB_MANEUVER_NAMES = {
+    1: "Classe 1 : Avanço Retilíneo Puro",
+    2: "Classe 2 : Ré Retilínea Pura",
+    3: "Classe 3 : Rotação Pura Anti-horária (Pivô Esquerda)",
+    4: "Classe 4 : Rotação Pura Horária (Pivô Direita)",
+    5: "Classe 5 : Curva Suave Frente-Esquerda",
+    6: "Classe 6 : Curva Suave Frente-Direita",
+    7: "Classe 7 : Curva Ré-Esquerda (Baliza)",
+    8: "Classe 8 : Curva Ré-Direita (Baliza)",
+    9: "Classe 9 : Atracação e Estabilização Final (Stop)"
+}
 
 
 def recast_angle(angle_rad: float) -> float:
-    """Normalize angle into the principal interval (-pi, +pi]."""
+    """Normaliza o ângulo rigorosamente no intervalo (-pi, +pi]."""
     return math.atan2(math.sin(angle_rad), math.cos(angle_rad))
 
 
-def compute_discrete_action(
+def classify_enib_maneuver(v: float, w: float) -> Tuple[int, str]:
+    """
+    Classifica a ação nas 9 classes canônicas da ENIB (Prof. Patrick Hénaff).
+    """
+    V_EPS = 0.025
+    W_EPS = 0.040
+
+    if abs(v) <= V_EPS and abs(w) <= W_EPS:
+        m_id = 9
+    elif abs(v) <= V_EPS:
+        m_id = 3 if w > 0.0 else 4
+    elif v > V_EPS:
+        if abs(w) <= W_EPS:
+            m_id = 1
+        elif w > 0.0:
+            m_id = 5
+        else:
+            m_id = 6
+    else:  # v < -V_EPS
+        if abs(w) <= W_EPS:
+            m_id = 2
+        elif w < 0.0:
+            m_id = 7
+        else:
+            m_id = 8
+
+    return m_id, ENIB_MANEUVER_NAMES[m_id]
+
+
+def expert_rule_based_controller(
     x_tr: float,
     y_tr: float,
     theta_r: float,
@@ -77,402 +125,229 @@ def compute_discrete_action(
     w_max: float = W_MAX,
     d_brake: float = D_BRAKE,
     d_stop: float = D_STOP
-) -> Tuple[float, float]:
+) -> Tuple[float, float, int]:
     """
-    Computes the optimal discrete action in {-v_max, 0, v_max} and {-w_max, 0, w_max}
-    given the robot-centric target coordinates (x_tr, y_tr) and absolute heading theta_r.
+    Controlador especialista determinístico baseado nas 9 manobras da ENIB.
+
+    Entradas:
+        x_tr, y_tr: Posição do alvo expressa no referencial local do robô (m).
+        theta_r   : Orientação absoluta do robô em relação ao cais (rad).
+
+    Saídas:
+        v_robot, w_robot: Velocidades discretizadas {-v_max, 0, v_max} e {-w_max, 0, w_max}.
+        maneuver_id: Classe canônica da manobra (1 a 9).
     """
-    d = math.hypot(x_tr, y_tr)
+    dist = math.hypot(x_tr, y_tr)
     e_theta = recast_angle(theta_r)
-
-    # 1. Terminal Docked Deadband (d <= d_stop, e.g. 5 cm)
-    if d <= d_stop:
-        v = 0.0
-        if abs(e_theta) <= 0.06:
-            w = 0.0
-        elif e_theta > 0:
-            w = -w_max  # Turn clockwise to bring theta_r -> 0
-        else:
-            w = w_max   # Turn counter-clockwise to bring theta_r -> 0
-        return v, w
-
-    # 2. Braking Zone (d <= d_brake, e.g. 20 cm)
-    # The linear speed drops to 0.0 so the network learns to brake smoothly!
-    if d <= d_brake:
-        v = 0.0
-        if y_tr > 0.04:
-            w = w_max   # Target at left -> Turn left
-        elif y_tr < -0.04:
-            w = -w_max  # Target at right -> Turn right
-        elif abs(e_theta) > 0.08:
-            w = -w_max if e_theta > 0 else w_max
-        else:
-            w = 0.0
-        return v, w
-
-    # 3. Reverse Docking Zone (Target is directly behind: x_tr < -d_brake and |y_tr| <= 1.5 m)
-    if x_tr < -d_brake and abs(y_tr) <= 1.5:
-        v = -v_max
-        # When reversing like a car:
-        # If target is to the left (y_tr > 0.05), turn left (w = +w_max)
-        # If target is to the right (y_tr < -0.05), turn right (w = -w_max)
-        if y_tr > 0.05:
-            w = w_max
-        elif y_tr < -0.05:
-            w = -w_max
-        else:
-            w = 0.0
-        return v, w
-
-    # 4. General Approach Zone
-    # Bearing angle to target in the robot's local body frame
     phi = math.atan2(y_tr, x_tr)
 
-    # If the target is far to the side (|phi| > 60 degrees = ~1.05 rad),
-    # execute pure rotation on the spot to face the target
-    if abs(phi) > 1.05:
+    # 1. Zona Morta de Atracação Final na Doca (d <= d_stop e ângulo alinhado)
+    if dist <= d_stop:
+        if abs(e_theta) <= D_STOP_ANGLE_TOL:
+            v, w = 0.0, 0.0   # Parada perfeita alinhada
+        elif e_theta > 0.0:
+            v, w = 0.0, -w_max  # Pivô horário
+        else:
+            v, w = 0.0, w_max   # Pivô anti-horário
+        m_id, _ = classify_enib_maneuver(v, w)
+        return v, w, m_id
+
+    # 2. Zona de Frenagem e Alinhamento no Cais (d <= d_brake)
+    if dist <= d_brake:
         v = 0.0
-        w = w_max if phi > 0 else -w_max
-        return v, w
+        if abs(e_theta) <= 0.20:
+            w = 0.0
+        elif e_theta > 0.0:
+            w = -w_max
+        else:
+            w = w_max
+        m_id, _ = classify_enib_maneuver(v, w)
+        return v, w, m_id
 
-    # Target is in front: Drive forward and steer towards target
+    # 3. Zona de Baliza de Ré (Alvo diretamente na traseira: x_tr < -d_brake e |y_tr| <= 1.5 m)
+    if x_tr < -d_brake and abs(y_tr) <= 1.5:
+        v = -v_max
+        phi_rear = math.atan2(y_tr, -x_tr)
+        if phi_rear > REVERSE_DEADBAND:
+            w = -w_max  # Leva a traseira à esquerda (girando horário)
+        elif phi_rear < -REVERSE_DEADBAND:
+            w = w_max   # Leva a traseira à direita (girando anti-horário)
+        else:
+            w = 0.0     # Ré retilínea pura
+        m_id, _ = classify_enib_maneuver(v, w)
+        return v, w, m_id
+
+    # 4. Alvo Muito Lateral ou Fora do Campo Frontal (|phi| > 77.3° = ~1.35 rad)
+    if abs(phi) > MAX_PIVOT_PHI:
+        v = 0.0
+        w = w_max if phi > 0.0 else -w_max
+        m_id, _ = classify_enib_maneuver(v, w)
+        return v, w, m_id
+
+    # 5. Aproximação Frontal Suave (|phi| <= 77.3°)
     v = v_max
-    if phi > 0.05:
-        w = w_max   # Target at left -> Turn left
-    elif phi < -0.05:
-        w = -w_max  # Target at right -> Turn right
+    if dist < 1.2:
+        # Perto da vaga (< 1.2m), combina a visada do alvo com o alinhamento terminal (theta -> 0)
+        steer_err = phi + 0.4 * (-e_theta)
     else:
-        w = 0.0     # Drive straight
+        # Longe da vaga, mira de forma direta na linha de visada do alvo
+        steer_err = phi
 
-    return v, w
+    if steer_err > STEER_DEADBAND:
+        w = w_max   # Curva para a esquerda
+    elif steer_err < -STEER_DEADBAND:
+        w = -w_max  # Curva para a direita
+    else:
+        w = 0.0     # Avanço retilíneo puro
+
+    m_id, _ = classify_enib_maneuver(v, w)
+    return v, w, m_id
 
 
-def generate_macro_grid(
+def generate_balanced_grid(
     x_max: float = X_MAX,
     y_max: float = Y_MAX,
     step_xy: float = STEP_XY,
     num_angles: int = NUM_ANGLES,
     v_max: float = V_MAX,
-    w_max: float = W_MAX
-) -> List[Tuple[float, float, float, float, float]]:
+    w_max: float = W_MAX,
+    samples_per_class: int = SAMPLES_PER_CLASS
+) -> Tuple[List[List[float]], Dict[int, int]]:
     """
-    Generates systematic grid samples over [-x_max, x_max] and [-y_max, y_max] every step_xy
-    and across num_angles discrete directions (-150 deg to +180 deg in 30 deg steps).
+    Gera a amostragem em grade com passo frequente e uniforme, e equilibra perfeitamente
+    as 9 classes canônicas da ENIB para que cada uma tenha exatamente 'samples_per_class' amostras.
+    Garante também a inclusão das amostras exatas de parada na doca (0.0, 0.0, 0.0) -> (0.0, 0.0).
     """
-    samples: List[Tuple[float, float, float, float, float]] = []
+    samples_by_class: Dict[int, List[List[float]]] = {i: [] for i in range(1, 10)}
 
-    # Coordinates from -x_max to +x_max (ex: 21 steps from -5.0 to +5.0)
-    n_steps_x = int(round(2 * x_max / step_xy))
+    # Posições de -x_max a +x_max com passo frequente e uniforme step_xy (ex: 0.20 m)
+    n_steps_x = int(round(2.0 * x_max / step_xy))
     xs = [round(-x_max + i * step_xy, 2) for i in range(n_steps_x + 1)]
 
-    n_steps_y = int(round(2 * y_max / step_xy))
+    n_steps_y = int(round(2.0 * y_max / step_xy))
     ys = [round(-y_max + i * step_xy, 2) for i in range(n_steps_y + 1)]
 
-    # 12 ângulos discretos a cada 30 graus (-150° a +180°), contendo exatamente theta=0.0
-    thetas = [round(-math.pi + (i + 1) * (2 * math.pi / num_angles), 4) for i in range(num_angles)]
+    # 24 orientações com passo angular frequente e uniforme a cada 15° (2*pi / num_angles)
+    thetas = [round(-math.pi + (i + 1) * (2.0 * math.pi / num_angles), 4) for i in range(num_angles)]
 
+    # 1. Amostragem da grade uniforme (2601 posições x 24 orientações = 62.424 amostras)
     for x in xs:
         for y in ys:
             for th in thetas:
-                v, w = compute_discrete_action(x, y, th, v_max=v_max, w_max=w_max)
-                samples.append((x, y, th, v, w))
+                v, w, m_id = expert_rule_based_controller(
+                    x, y, th,
+                    v_max=v_max, w_max=w_max,
+                    d_brake=D_BRAKE, d_stop=D_STOP
+                )
+                samples_by_class[m_id].append([x, y, th, v, w])
 
-    return samples
+    # 2. Amostras exatas de ancoragem e repouso na doca (0.0, 0.0, 0.0) -> (v=0.0, w=0.0) [Classe 9]
+    for _ in range(samples_per_class):
+        samples_by_class[9].append([0.0, 0.0, 0.0, 0.0, 0.0])
+
+    # 3. Balanceamento estratificado perfeito (exatamente samples_per_class para cada classe)
+    balanced_samples: List[List[float]] = []
+    final_counts: Dict[int, int] = {}
+
+    for m_id in range(1, 10):
+        pool = samples_by_class[m_id]
+        if not pool:
+            continue
+
+        if len(pool) >= samples_per_class:
+            # Sub-amostragem com passo constante e regular ao longo da grade ordenada
+            step_idx = len(pool) / samples_per_class
+            selected = [pool[int(i * step_idx)] for i in range(samples_per_class)]
+        else:
+            # Re-amostragem periódica uniforme das classes minoritárias
+            repeats = samples_per_class // len(pool)
+            remainder = samples_per_class % len(pool)
+            selected = pool * repeats + pool[:remainder]
+
+        balanced_samples.extend(selected)
+        final_counts[m_id] = len(selected)
+
+    # 4. Embaralhamento determinístico com semente fixa para reprodutibilidade científica
+    random.seed(42)
+    random.shuffle(balanced_samples)
+
+    return balanced_samples, final_counts
 
 
-def generate_dense_docking_subgrid() -> List[Tuple[float, float, float, float, float]]:
+def build_dataset(
+    output_path: str = "data/dataset.csv",
+    step_xy: float = STEP_XY,
+    num_angles: int = NUM_ANGLES,
+    v_max: float = V_MAX,
+    w_max: float = W_MAX,
+    samples_per_class: int = SAMPLES_PER_CLASS
+) -> int:
     """
-    Generates high-density samples around the docking station (|x| <= 0.6 m, |y| <= 0.6 m)
-    to provide high resolution for the braking threshold and zero-velocity equilibria.
+    Função principal que constrói e grava o CSV oficial de 5 colunas perfeitamente justo.
     """
-    samples: List[Tuple[float, float, float, float, float]] = []
+    total_expected = samples_per_class * 9
+    print("\n" + "=" * 75)
+    print("   LIMO OFFLINE LEARNING : GERADOR DE DATASET PERFEITAMENTE JUSTO")
+    print("=" * 75)
+    print(f"Arena Espacial       : [-{X_MAX:.1f}, +{X_MAX:.1f}] x [-{Y_MAX:.1f}, +{Y_MAX:.1f}] m")
+    print(f"Passo Espacial (Δxy) : {step_xy:.2f} m (grade uniforme frequente)")
+    print(f"Passo Angular (Δθ)   : {360.0/num_angles:.1f}° ({num_angles} direções por posição)")
+    print(f"Amostras por Classe  : {samples_per_class:,} amostras para cada uma das 9 manobras")
+    print(f"Total Justo Esperado : {total_expected:,} amostras (exatamente {100.0/9:.2f}% por classe)")
+    print(f"Amostras (0,0,0)     : Presentes em repouso perfeito na doca (Classe 9)")
+    print(f"Formato de Saída     : Estritamente 5 colunas {COLUMNS}")
+    print(f"Arquivo de Destino   : {output_path}")
+    print("=" * 75 + "\n")
 
-    # Fine positions from -0.6 to +0.6 with step 0.05 m
-    fine_steps = [round(v * 0.05, 3) for v in range(-12, 13)]
-    # Fine angles around 0
-    fine_thetas = [round(th * 0.05, 3) for th in range(-10, 11)] + [
-        round(math.pi / 4, 3), round(-math.pi / 4, 3),
-        round(math.pi / 2, 3), round(-math.pi / 2, 3),
-        round(math.pi, 3), round(-math.pi, 3)
-    ]
-
-    for x in fine_steps:
-        for y in fine_steps:
-            for th in fine_thetas:
-                v, w = compute_discrete_action(x, y, th)
-                samples.append((x, y, th, v, w))
-
-    return samples
-
-
-def simulate_rollout(
-    start_x_tr: float,
-    start_y_tr: float,
-    start_theta_r: float,
-    max_steps: int = 200
-) -> List[Tuple[float, float, float, float, float]]:
-    """
-    Simulates a closed-loop trajectory rollout at 20 Hz in the robot's relative frame.
-    In global frame, target is at (0, 0, 0), robot starts with relative pose.
-    """
-    rollout_samples: List[Tuple[float, float, float, float, float]] = []
-
-    # Convert initial robot-relative target to global robot pose (assuming target at origin 0,0,0)
-    # x_tr = (0 - x_r)*cos(th) + (0 - y_r)*sin(th)
-    # y_tr = -(0 - x_r)*sin(th) + (0 - y_r)*cos(th)
-    # Inverting gives robot world pose:
-    th = recast_angle(start_theta_r)
-    cos_th = math.cos(th)
-    sin_th = math.sin(th)
-    rx = -(start_x_tr * cos_th - start_y_tr * sin_th)
-    ry = -(start_x_tr * sin_th + start_y_tr * cos_th)
-
-    for _ in range(max_steps):
-        th_norm = recast_angle(th)
-        cos_t = math.cos(th_norm)
-        sin_t = math.sin(th_norm)
-
-        # Compute relative target in robot frame
-        dx = 0.0 - rx
-        dy = 0.0 - ry
-        x_tr = dx * cos_t + dy * sin_t
-        y_tr = -dx * sin_t + dy * cos_t
-
-        v, w = compute_discrete_action(x_tr, y_tr, th_norm)
-        rollout_samples.append((round(x_tr, 4), round(y_tr, 4), round(th_norm, 4), v, w))
-
-        # Check stopping condition
-        dist = math.hypot(x_tr, y_tr)
-        if dist <= D_STOP and abs(th_norm) <= 0.05:
-            break
-
-        # Forward Euler kinematic update of unicycle at 20 Hz
-        rx += v * math.cos(th_norm) * DT
-        ry += v * math.sin(th_norm) * DT
-        th += w * DT
-
-    return rollout_samples
-
-
-def generate_rollouts() -> List[Tuple[float, float, float, float, float]]:
-    """
-    Simulates multiple rollouts starting from diverse points across the 5x5m arena.
-    """
-    samples: List[Tuple[float, float, float, float, float]] = []
-
-    start_positions = [
-        (-4.0, 0.0), (-3.0, 1.5), (-3.0, -1.5), (-2.0, 2.0), (-2.0, -2.0),
-        (-1.5, 0.0), (-1.0, 1.0), (-1.0, -1.0), (-0.5, 0.5), (-0.5, -0.5),
-        (1.0, 0.0), (2.0, 1.0), (2.0, -1.0), (3.0, 0.0), (1.5, 1.5), (1.5, -1.5),
-        (0.0, 2.0), (0.0, -2.0), (0.0, 3.5), (0.0, -3.5), (4.0, 2.0), (-4.0, -2.0)
-    ]
-    start_headings = [
-        0.0, round(math.pi / 4, 3), round(-math.pi / 4, 3),
-        round(math.pi / 2, 3), round(-math.pi / 2, 3),
-        round(3 * math.pi / 4, 3), round(-3 * math.pi / 4, 3), round(math.pi, 3)
-    ]
-
-    for sx, sy in start_positions:
-        for sth in start_headings:
-            traj = simulate_rollout(sx, sy, sth)
-            samples.extend(traj)
-
-    return samples
-
-
-def apply_bilateral_symmetry(
-    samples: List[Tuple[float, float, float, float, float]]
-) -> List[Tuple[float, float, float, float, float]]:
-    """
-    Applies sagittal reflection symmetry to perfectly balance left/right turning:
-    y_target -> -y_target, theta_robot -> -theta_robot, w_robot -> -w_robot.
-    """
-    augmented: List[Tuple[float, float, float, float, float]] = []
-    seen = set()
-
-    for x, y, th, v, w in samples:
-        r_th = round(th, 4)
-        if abs(abs(r_th) - 3.1416) < 1e-3:
-            r_th = 3.1416
-        key = (round(x, 2), round(y, 2), r_th)
-        if key not in seen:
-            seen.add(key)
-            augmented.append((round(x, 2), round(y, 2), r_th, v, w))
-
-        # Mirror sample
-        mx = round(x, 2)
-        my = round(-y, 2)
-        mth = round(recast_angle(-th), 4)
-        if abs(abs(mth) - 3.1416) < 1e-3:
-            mth = 3.1416
-        mv = v
-        mw = -w
-
-        mkey = (mx, my, mth)
-        if mkey not in seen:
-            seen.add(mkey)
-            augmented.append((mx, my, mth, mv, mw))
-
-    return augmented
-
-
-def main():
-    parser = argparse.ArgumentParser(description="Generate LIMO robot-centric relative dataset.")
-    parser.add_argument(
-        "--output",
-        type=str,
-        default="data/dataset.csv",
-        help="Target output CSV file path (default: data/dataset.csv)."
+    print("1. Gerando grade de amostragem regular e aplicando balanceamento justo 9x...")
+    samples, maneuver_counts = generate_balanced_grid(
+        x_max=X_MAX, y_max=Y_MAX,
+        step_xy=step_xy, num_angles=num_angles,
+        v_max=v_max, w_max=w_max,
+        samples_per_class=samples_per_class
     )
-    parser.add_argument(
-        "--x-max",
-        type=float,
-        default=X_MAX,
-        help=f"Max X coordinate limit in meters (default: {X_MAX})."
-    )
-    parser.add_argument(
-        "--y-max",
-        type=float,
-        default=Y_MAX,
-        help=f"Max Y coordinate limit in meters (default: {Y_MAX})."
-    )
-    parser.add_argument(
-        "--step-xy",
-        type=float,
-        default=STEP_XY,
-        help=f"Spatial grid resolution step in meters (default: {STEP_XY})."
-    )
-    parser.add_argument(
-        "--num-angles",
-        type=int,
-        default=NUM_ANGLES,
-        help=f"Number of discrete angles across [-pi, +pi] (default: {NUM_ANGLES})."
-    )
-    parser.add_argument(
-        "--dock-reinforce",
-        type=int,
-        default=NUM_DOCK_REINFORCEMENTS,
-        help=f"Number of extra (0,0,0)->(0,0) stop samples to append (default: {NUM_DOCK_REINFORCEMENTS})."
-    )
-    parser.add_argument(
-        "--v-max",
-        type=float,
-        default=V_MAX,
-        help=f"Maximum linear velocity in m/s (default: {V_MAX})."
-    )
-    parser.add_argument(
-        "--w-max",
-        type=float,
-        default=W_MAX,
-        help=f"Maximum angular velocity in rad/s (default: {W_MAX})."
-    )
-    parser.add_argument(
-        "--pure-grid",
-        action="store_true",
-        default=PURE_GRID_ONLY,
-        help="Only include the regular grid and dock reinforcement, without decimal rollouts (default: True)."
-    )
-    parser.add_argument(
-        "--include-subgrid",
-        action="store_true",
-        default=INCLUDE_DOCK_SUBGRID,
-        help="Include dense fine docking subgrid (step 0.05m)."
-    )
-    parser.add_argument(
-        "--include-rollouts",
-        action="store_true",
-        default=INCLUDE_ROLLOUTS,
-        help="Include dynamic Euler trajectory rollouts at 20 Hz."
-    )
-    args = parser.parse_args()
+    total_samples = len(samples)
+    print(f"   -> Total de amostras geradas: {total_samples:,}")
 
-    os.makedirs(os.path.dirname(args.output), exist_ok=True)
+    # Relatório de distribuição estatística das 9 manobras da ENIB
+    print("\n" + "-" * 75)
+    print("  DISTRIBUIÇÃO DAS 9 MANOBRAS CANÔNICAS DA ENIB (Patrick Hénaff)")
+    print("-" * 75)
+    for m_id in range(1, 10):
+        cnt = maneuver_counts[m_id]
+        pct = (cnt / max(1, total_samples)) * 100.0
+        print(f"{ENIB_MANEUVER_NAMES[m_id]:<48} : {cnt:6d} amostras ({pct:5.2f}%)")
+    print("-" * 75)
 
-    print("\n" + "=" * 68)
-    print("      LIMO OFFLINE LEARNING : GERADOR DE DATASET CANÔNICO")
-    print("=" * 68)
-    print(f"Arena Espacial       : [-{args.x_max:.1f}, +{args.x_max:.1f}] x [-{args.y_max:.1f}, +{args.y_max:.1f}] m")
-    n_pts_x = int(round(2 * args.x_max / args.step_xy)) + 1
-    n_pts_y = int(round(2 * args.y_max / args.step_xy)) + 1
-    print(f"Resolução da Grade   : {args.step_xy:.2f} m ({n_pts_x}x{n_pts_y} = {n_pts_x * n_pts_y} posições)")
-    print(f"Ângulos Discretos    : {args.num_angles} direções (a cada {360.0/args.num_angles:.1f}°)")
-    print(f"Ações Lineares (v)   : {{-{args.v_max:.2f}, 0.00, +{args.v_max:.2f}}} m/s")
-    print(f"Ações Angulares (w)  : {{-{args.w_max:.2f}, 0.00, +{args.w_max:.2f}}} rad/s")
-    print(f"Reforço na Doca (0)  : {args.dock_reinforce} réplicas da pose (x=0, y=0, θ=0) -> (v=0, w=0)")
-    print(f"Modo Grade Pura      : {'Ativado (sem valores decimais quebrados)' if args.pure_grid else 'Desativado'}")
-    print(f"Arquivo de Saída     : {args.output}")
-    print("=" * 68 + "\n")
-
-    # 1. Macro Grid Generation (ex: 21 x 21 x 12 = 5,292 amostras puras)
-    print(f"1. Gerando grade sistemática ({args.step_xy}m, {args.num_angles} ângulos)...")
-    grid_samples = generate_macro_grid(
-        x_max=args.x_max,
-        y_max=args.y_max,
-        step_xy=args.step_xy,
-        num_angles=args.num_angles,
-        v_max=args.v_max,
-        w_max=args.w_max
-    )
-    print(f"   -> Amostras da grade pura: {len(grid_samples):,}")
-
-    all_raw = list(grid_samples)
-
-    if not args.pure_grid and args.include_subgrid:
-        print("   -> Gerando sub-grade densa de docagem (passo 0.05m)...")
-        dock_samples = generate_dense_docking_subgrid()
-        all_raw.extend(dock_samples)
-
-    if not args.pure_grid and args.include_rollouts:
-        print("   -> Gerando rollouts dinâmicos a 20 Hz...")
-        rollout_samples = generate_rollouts()
-        all_raw.extend(rollout_samples)
-
-    # 2. Simetria Sagital e Deduplicação
-    print("2. Aplicando simetria sagital e deduplicação...")
-    final_dataset = apply_bilateral_symmetry(all_raw)
-    print(f"   -> Amostras únicas pós-simetria: {len(final_dataset):,}")
-
-    # 3. Reforço da Doca (x=0, y=0, theta=0 -> v=0, w=0)
-    if args.dock_reinforce > 0:
-        print(f"3. Inserindo {args.dock_reinforce} réplicas de ancoragem na doca (0,0,0) -> (0,0)...")
-        for _ in range(args.dock_reinforce):
-            final_dataset.append((0.0, 0.0, 0.0, 0.0, 0.0))
-
-    # Salva no arquivo CSV
-    with open(args.output, "w", newline="", encoding="utf-8") as f:
+    # Gravação do arquivo CSV com estritamente 5 colunas
+    os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
+    with open(output_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         writer.writerow(COLUMNS)
-        for row in final_dataset:
+        for row in samples:
             writer.writerow(row)
 
-    # Estatísticas
-    v_counts = { -args.v_max: 0, 0.0: 0, args.v_max: 0 }
-    w_counts = { -args.w_max: 0, 0.0: 0, args.w_max: 0 }
-    dock_zeros = 0
-    for x, y, th, v, w in final_dataset:
-        v_key = round(v, 2)
-        w_key = round(w, 2)
-        if v_key in v_counts:
-            v_counts[v_key] += 1
-        if w_key in w_counts:
-            w_counts[w_key] += 1
-        if abs(x) < 1e-4 and abs(y) < 1e-4 and abs(th) < 1e-4:
-            dock_zeros += 1
-
-    print("\n" + "-" * 50)
-    print("  DISTRIBUIÇÃO ESTATÍSTICA DO DATASET GERADO")
-    print("-" * 50)
-    print(f"Total de amostras   : {len(final_dataset):,}")
-    print(f"Amostras na Doca (0): {dock_zeros} ({100.0 * dock_zeros / len(final_dataset):.2f}%)")
-    print(f"v_robot = -{args.v_max:.2f} m/s : {v_counts[-args.v_max]:>6} ({100.0 * v_counts[-args.v_max] / len(final_dataset):.1f}%)")
-    print(f"v_robot =  0.00 m/s : {v_counts[0.0]:>6} ({100.0 * v_counts[0.0] / len(final_dataset):.1f}%)")
-    print(f"v_robot = +{args.v_max:.2f} m/s : {v_counts[args.v_max]:>6} ({100.0 * v_counts[args.v_max] / len(final_dataset):.1f}%)")
-    print(f"w_robot = -{args.w_max:.2f} rad/s: {w_counts[-args.w_max]:>6} ({100.0 * w_counts[-args.w_max] / len(final_dataset):.1f}%)")
-    print(f"w_robot =  0.00 rad/s: {w_counts[0.0]:>6} ({100.0 * w_counts[0.0] / len(final_dataset):.1f}%)")
-    print(f"w_robot = +{args.w_max:.2f} rad/s: {w_counts[args.w_max]:>6} ({100.0 * w_counts[args.w_max] / len(final_dataset):.1f}%)")
-    print("-" * 50)
-    print(f"\n[Sucesso] Dataset salvo em: {args.output}\n")
+    print(f"\n[Sucesso] Dataset justo de 5 colunas ({total_samples:,} amostras) salvo em: {output_path}\n")
+    return total_samples
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(
+        description="Gerador de Dataset de 5 Colunas LIMO Justo (9 Manobras ENIB com 11,11% cada)"
+    )
+    parser.add_argument("--output", type=str, default="data/dataset.csv", help="Caminho do CSV de saída")
+    parser.add_argument("--step", type=float, default=STEP_XY, help="Passo da grade em metros (padrão: 0.20)")
+    parser.add_argument("--angles", type=int, default=NUM_ANGLES, help="Quantidade de orientações regulares (padrão: 24)")
+    parser.add_argument("--samples-per-class", type=int, default=SAMPLES_PER_CLASS, help="Amostras por classe (padrão: 5000)")
+    parser.add_argument("--v-max", type=float, default=V_MAX, help="Velocidade linear máxima (padrão: 0.50)")
+    parser.add_argument("--w-max", type=float, default=W_MAX, help="Velocidade angular máxima (padrão: 1.00)")
+    args = parser.parse_args()
+
+    build_dataset(
+        output_path=args.output,
+        step_xy=args.step,
+        num_angles=args.angles,
+        samples_per_class=args.samples_per_class,
+        v_max=args.v_max,
+        w_max=args.w_max
+    )

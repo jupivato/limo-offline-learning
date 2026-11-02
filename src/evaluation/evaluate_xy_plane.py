@@ -42,7 +42,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-from src.core.pioneer_nn import PioneerNN
+from src.core.pioneer_nn import PioneerNN, compute_k_theta
 
 plt.rcParams['font.sans-serif'] = 'DejaVu Sans'
 plt.rcParams['font.family'] = 'sans-serif'
@@ -113,11 +113,12 @@ def run_axial_simulation(model: PioneerNN, x0: float, y0: float, th0: float, max
         in_0 = max(-1.0, min(1.0, xr / X_MAX))
         in_1 = max(-1.0, min(1.0, yr / Y_MAX))
         in_2 = max(-1.0, min(1.0, th / math.pi))
+        k_theta = compute_k_theta(xr, yr)
 
         if step > 10 and dist < 0.15 and abs(e_th) < 0.35:
             break
 
-        cmd_raw = model([in_0, in_1, in_2])
+        cmd_raw = model([in_0, in_1, in_2, k_theta])
         if hasattr(cmd_raw, "tolist"):
             cmd = cmd_raw.tolist()
         else:
@@ -245,7 +246,8 @@ def generate_2d_field_maps(model: PioneerNN):
             in_0 = max(-1.0, min(1.0, xr / X_MAX))
             in_1 = max(-1.0, min(1.0, yr / Y_MAX))
             in_2 = max(-1.0, min(1.0, th_val / math.pi))
-            pts.append([in_0, in_1, in_2])
+            k_th = compute_k_theta(xr, yr)
+            pts.append([in_0, in_1, in_2, k_th])
 
     with torch.no_grad():
         preds = model(torch.tensor(pts, dtype=torch.float32)).numpy()
@@ -339,7 +341,8 @@ def plot_1d_axis_profiles(model: PioneerNN):
         in_0 = max(-1.0, min(1.0, xr / X_MAX))
         in_1 = max(-1.0, min(1.0, yr / Y_MAX))
         in_2 = max(-1.0, min(1.0, th / math.pi))
-        cmd = model([in_0, in_1, in_2])
+        k_th = compute_k_theta(xr, yr)
+        cmd = model([in_0, in_1, in_2, k_th])
         v_x_prof.append(float(cmd[0]) * V_MAX)
         w_x_prof.append(float(cmd[1]) * W_MAX)
 
@@ -354,7 +357,8 @@ def plot_1d_axis_profiles(model: PioneerNN):
         in_0 = max(-1.0, min(1.0, xr / X_MAX))
         in_1 = max(-1.0, min(1.0, yr / Y_MAX))
         in_2 = max(-1.0, min(1.0, th / math.pi))
-        cmd = model([in_0, in_1, in_2])
+        k_th = compute_k_theta(xr, yr)
+        cmd = model([in_0, in_1, in_2, k_th])
         v_y_prof.append(float(cmd[0]) * V_MAX)
         w_y_prof.append(float(cmd[1]) * W_MAX)
 
@@ -396,7 +400,7 @@ def main():
     print("=" * 68 + "\n")
 
     print("1. Carregando modelo treinado...")
-    model = PioneerNN(input_size=3, hidden_size=1000, output_size=2, use_bias=False)
+    model = PioneerNN(input_size=4, hidden_size=1000, output_size=2, use_bias=False)
     model.load_from_json_file(WEIGHTS_PATH)
     model.eval()
 

@@ -1,20 +1,27 @@
 {
-    "description": "Offline learning for AgileX LIMO with robot-centric relative coordinates and discrete actions {-vmax, 0, +vmax} & {-wmax, 0, +wmax}",
+    "description": "Offline learning for AgileX LIMO with robot-centric relative coordinates, uniform regular grid sampling and perfectly balanced discrete actions {-vmax, 0, +vmax} & {-wmax, 0, +wmax}",
     "dataset": {
         "schema": "robot_centric_5_columns",
         "columns": ["x_target_robot", "y_target_robot", "theta_robot", "v_robot", "w_robot"],
         "path": "data/dataset.csv",
+        "total_samples": 45000,
+        "samples_per_class": 5000,
+        "class_proportion_pct": 11.11,
         "x_max": 5.0,
         "y_max": 5.0,
-        "step_xy": 0.5,
-        "theta_range": [-3.141592653589793, 3.141592653589793]
+        "step_xy": 0.2,
+        "num_angles": 24,
+        "angle_step_deg": 15.0,
+        "steer_deadband_rad": 0.26,
+        "reverse_deadband_rad": 0.28,
+        "dock_angle_tol_rad": 0.35
     },
     "model": {
         "architecture": "PioneerNN",
-        "input_size": 3,
+        "input_size": 4,
         "hidden_size": 1000,
         "output_size": 2,
-        "use_bias": false,
+        "use_bias": true,
         "weights_path": "models/supervised_w_torch_diff.json",
         "history_path": "models/training_history.json"
     },
@@ -22,7 +29,8 @@
         "inputs": {
             "in_0": "x_target_robot / 5.0",
             "in_1": "y_target_robot / 5.0",
-            "in_2": "theta_robot_absolute / pi"
+            "in_2": "theta_robot_absolute / pi",
+            "in_3": "k_theta = 1 - 0.9 * exp(-10*(x_r^2+y_r^2)^2)"
         },
         "outputs_training": {
             "v_norm": "v_robot / 0.50 in {-1.0, 0.0, +1.0}",
@@ -38,8 +46,8 @@
         "v_min": -0.50,
         "w_max": 1.00,
         "w_min": -1.00,
-        "d_brake": 0.20,
-        "d_stop": 0.05
+        "d_brake": 0.30,
+        "d_stop": 0.15
     },
     "evaluation": {
         "output_dir": "data/evaluation/batch_run"
