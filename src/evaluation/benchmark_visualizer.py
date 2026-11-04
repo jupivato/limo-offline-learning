@@ -43,21 +43,10 @@ import math
 import json
 from typing import List, Dict, Any, Optional, Tuple
 
-# Inclusion automatique du dossier racine du projet dans sys.path
+# Dynamic project root resolution
 _project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
-
-# Inclusion automatique du chemin dist-packages si present pour la version Python courante
-_py_ver = f"{sys.version_info.major}.{sys.version_info.minor}"
-for _p in [
-    f"/home/juliapivato/snap/antigravity-cli/common/local/lib/python{_py_ver}/dist-packages",
-    os.path.expanduser(f"~/snap/antigravity-cli/common/local/lib/python{_py_ver}/dist-packages"),
-    os.path.expanduser(f"~/local/lib/python{_py_ver}/dist-packages"),
-    os.path.expanduser(f"~/.local/lib/python{_py_ver}/site-packages"),
-]:
-    if os.path.exists(_p) and _p not in sys.path:
-        sys.path.insert(0, _p)
 
 try:
     import matplotlib

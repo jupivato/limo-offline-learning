@@ -22,17 +22,7 @@ import math
 import json
 from typing import List, Dict, Any
 
-# Auto-detecção de pacotes locais e snap
-_py_ver = f"{sys.version_info.major}.{sys.version_info.minor}"
-for _p in [
-    f"/home/juliapivato/snap/antigravity-cli/common/local/lib/python{_py_ver}/dist-packages",
-    os.path.expanduser(f"~/snap/antigravity-cli/common/local/lib/python{_py_ver}/dist-packages"),
-    os.path.expanduser(f"~/local/lib/python{_py_ver}/dist-packages"),
-    os.path.expanduser(f"~/.local/lib/python{_py_ver}/site-packages"),
-]:
-    if os.path.exists(_p) and _p not in sys.path:
-        sys.path.insert(0, _p)
-
+# Dynamic project root resolution
 _project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
@@ -118,14 +108,14 @@ def run_axial_simulation(model: PioneerNN, x0: float, y0: float, th0: float, max
         if step > 10 and dist < 0.15 and abs(e_th) < 0.35:
             break
 
-        cmd_raw = model([in_0, in_1, in_2, k_theta])
+        cmd_raw = model([in_0, in_1, in_2])
         if hasattr(cmd_raw, "tolist"):
             cmd = cmd_raw.tolist()
         else:
             cmd = list(cmd_raw)
 
         v_cmd = max(-V_MAX, min(V_MAX, float(cmd[0]) * V_MAX))
-        w_cmd = max(-W_MAX, min(W_MAX, float(cmd[1]) * W_MAX))
+        w_cmd = max(-W_MAX, min(W_MAX, float(cmd[1]) * W_MAX)) * k_theta
 
         t_hist.append(t)
         x_hist.append(x)
@@ -235,6 +225,7 @@ def generate_2d_field_maps(model: PioneerNN):
     model.eval()
 
     pts = []
+    k_thetas = []
     for i in range(grid_size):
         for j in range(grid_size):
             x_val, y_val, th_val = X[i, j], Y[i, j], TH[i, j]
@@ -247,7 +238,8 @@ def generate_2d_field_maps(model: PioneerNN):
             in_1 = max(-1.0, min(1.0, yr / Y_MAX))
             in_2 = max(-1.0, min(1.0, th_val / math.pi))
             k_th = compute_k_theta(xr, yr)
-            pts.append([in_0, in_1, in_2, k_th])
+            pts.append([in_0, in_1, in_2])
+            k_thetas.append(k_th)
 
     with torch.no_grad():
         preds = model(torch.tensor(pts, dtype=torch.float32)).numpy()
@@ -257,10 +249,11 @@ def generate_2d_field_maps(model: PioneerNN):
         for j in range(grid_size):
             v_norm = preds[idx, 0]
             w_norm = preds[idx, 1]
+            k_th_val = k_thetas[idx]
             idx += 1
 
             v_phys = float(v_norm) * V_MAX
-            w_phys = float(w_norm) * W_MAX
+            w_phys = float(w_norm) * W_MAX * k_th_val
 
             V_lin[i, j] = v_phys
             W_ang[i, j] = w_phys
@@ -342,9 +335,9 @@ def plot_1d_axis_profiles(model: PioneerNN):
         in_1 = max(-1.0, min(1.0, yr / Y_MAX))
         in_2 = max(-1.0, min(1.0, th / math.pi))
         k_th = compute_k_theta(xr, yr)
-        cmd = model([in_0, in_1, in_2, k_th])
+        cmd = model([in_0, in_1, in_2])
         v_x_prof.append(float(cmd[0]) * V_MAX)
-        w_x_prof.append(float(cmd[1]) * W_MAX)
+        w_x_prof.append(float(cmd[1]) * W_MAX * k_th)
 
     # 2. Corte no Eixo Y (x = 0, robô virado para o centro)
     v_y_prof = []
@@ -358,9 +351,9 @@ def plot_1d_axis_profiles(model: PioneerNN):
         in_1 = max(-1.0, min(1.0, yr / Y_MAX))
         in_2 = max(-1.0, min(1.0, th / math.pi))
         k_th = compute_k_theta(xr, yr)
-        cmd = model([in_0, in_1, in_2, k_th])
+        cmd = model([in_0, in_1, in_2])
         v_y_prof.append(float(cmd[0]) * V_MAX)
-        w_y_prof.append(float(cmd[1]) * W_MAX)
+        w_y_prof.append(float(cmd[1]) * W_MAX * k_th)
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13, 5), dpi=300)
     fig.patch.set_facecolor("#ffffff")
@@ -400,7 +393,7 @@ def main():
     print("=" * 68 + "\n")
 
     print("1. Carregando modelo treinado...")
-    model = PioneerNN(input_size=4, hidden_size=1000, output_size=2, use_bias=False)
+    model = PioneerNN(input_size=3, hidden_size=1000, output_size=2, use_bias=False)
     model.load_from_json_file(WEIGHTS_PATH)
     model.eval()
 

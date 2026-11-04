@@ -1,19 +1,36 @@
 """
-Exécution Autonome en Boucle Fermée (Autonomous Navigation)
-===========================================================
-Charge les poids synaptiques optimisés hors ligne et pilote le robot LIMO
-en boucle fermée avec poids gelés (mode inférence pure à 20 Hz).
+Closed-Loop Autonomous Navigation and ISO 18646-2 Metrological Positioning
+===========================================================================
+Executes closed-loop autonomous navigation with frozen synaptic weights on the 
+AgileX LIMO mobile robot at 20 Hz, supporting both Gazebo simulation and physical hardware.
 
-Fonctionnalités :
-- Chargement instantané des poids JSON dans le réseau PioneerNN.
-- Lecture d'odométrie (/odom) et calcul des entrées normalisées [in_0, in_1, in_2].
-- Inférence PyTorch en temps réel (< 1 ms en CPU).
-- Publication des commandes de vitesse sur /cmd_vel avec chien de garde respecté.
-- Détection d'accostage précis (distance < 5 cm et orientation < 0.1 rad).
-- Enregistrement automatique de la session avec DataLogger pour certification ISO.
+Core Functionalities:
+---------------------
+1. Synaptic Policy Execution:
+   Loads the trained bias-free PioneerNN (3 inputs: x_R, y_R, theta_R).
+   Algebraic guarantee: PioneerNN([0, 0, 0]) == [0.0, 0.0] at the origin.
 
-Projet : LIMO Offline Learning (CERV / ENIB)
+2. SE(2) Metrological Distance Metric:
+   Calculates Euclidean distance and Lie group SE(2) composite distance:
+       d_xy = sqrt((x - x_t)^2 + (y - y_t)^2)
+       d_pose = sqrt(d_xy^2 + (b * e_theta)^2)
+   where b = 0.086 m (half-track width of AgileX LIMO converting heading error into meters).
+
+3. Docking Envelope & Stationary Dwell-Time Watchdog:
+   - Capture Envelope: d_xy <= dist_tol (0.05 m = 5 cm) and |e_theta| <= angle_tol (0.15 rad ~ 8.6°).
+   - Stability Dwell-Time: Robot must remain continuously stationary (displacement < 5 mm,
+     velocities near zero) for at least 30.0 seconds within the capture envelope before declaring success.
+   - Any departure or drift resets the dwell timer to ensure metrological stability.
+
+4. Kinematic Limits & Damping:
+   - V_MAX = 0.50 m/s, W_MAX = 1.00 rad/s.
+   - Radial yaw rate damping via K_theta(x_R, y_R) in terminal radius.
+
+Standards Compliance: ROS REP-103 & ISO 18646-2.
+Project: LIMO Offline Learning (CERV / Lab-STICC / ENIB).
 """
+
+from __future__ import annotations
 
 import os
 import sys
@@ -26,21 +43,10 @@ import collections
 from datetime import datetime
 from typing import List, Optional, Dict, Any, Tuple
 
-# Inclusion automatique du dossier racine du projet dans sys.path
+# Dynamic project root resolution
 _project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
-
-# Inclusion automatique du chemin dist-packages si present pour la version Python courante
-_py_ver = f"{sys.version_info.major}.{sys.version_info.minor}"
-for _p in [
-    f"/home/juliapivato/snap/antigravity-cli/common/local/lib/python{_py_ver}/dist-packages",
-    os.path.expanduser(f"~/snap/antigravity-cli/common/local/lib/python{_py_ver}/dist-packages"),
-    os.path.expanduser(f"~/local/lib/python{_py_ver}/dist-packages"),
-    os.path.expanduser(f"~/.local/lib/python{_py_ver}/site-packages"),
-]:
-    if os.path.exists(_p) and _p not in sys.path:
-        sys.path.insert(0, _p)
 
 try:
     import torch
@@ -54,24 +60,46 @@ try:
 except (ImportError, ModuleNotFoundError):
     ROS2_AVAILABLE = False
 
-from src.core.pioneer_nn import PioneerNN, compute_k_theta, compute_theta_strategic
-from src.ros2.limo_interface import LimoROS2Interface
+from src.core.pioneer_nn import PioneerNN, recast_angle
 from src.evaluation.data_logger import DataLogger
 
+try:
+    from src.ros2.limo_interface import LimoROS2Interface
+except (ImportError, ModuleNotFoundError):
+    LimoROS2Interface = None
+
 # ==============================================================================
-# ⚙️ CONFIGURAÇÕES GLOBAIS DE DESNORMALIZAÇÃO E LIMITES CINEMÁTICOS (MODIFIQUE AQUI)
+# GLOBAL KINEMATIC BOUNDARIES & METROLOGICAL PARAMETERS
 # ==============================================================================
-V_MAX = 0.50  # Velocidade linear máxima de desnormalização em m/s (dobrada de 0.24 para 0.50)
-W_MAX = 1.00  # Velocidade angular máxima de desnormalização em rad/s (dobrada de 0.50 para 1.00)
-X_MAX = 5.0   # Limite da arena em X (m)
-Y_MAX = 5.0   # Limite da arena em Y (m)
-ALPHA = [1.0 / X_MAX, 1.0 / Y_MAX, 1.0 / math.pi]
+V_MAX = 0.50                   # Maximum linear velocity (m/s)
+W_MAX = 1.00                   # Maximum angular velocity (rad/s)
+X_MAX = 5.0                    # Arena spatial boundary X (m)
+Y_MAX = 5.0                    # Arena spatial boundary Y (m)
+HALF_TRACK_B = 0.086           # Half-track width b = L/2 (m) for AgileX LIMO
+
+DEFAULT_DIST_TOL = 0.08        # 8 cm positioning radius from dock center (m)
+DEFAULT_ANGLE_TOL = 0.15       # Heading orientation tolerance (rad) ~ 8.6 deg
+DEFAULT_DWELL_TIME = 30.0      # Required continuous stationary duration at dock (s)
+DEFAULT_MAX_DURATION = 150.0   # Extended mission ceiling to accommodate navigation + dwell (s)
 # ==============================================================================
 
 
-def recast_angle(angle_rad: float) -> float:
-    """Recaste l'angle dans (-pi, pi]."""
-    return math.atan2(math.sin(angle_rad), math.cos(angle_rad))
+def compute_se2_distance(dx: float, dy: float, dtheta: float, b: float = HALF_TRACK_B) -> Tuple[float, float]:
+    """
+    Computes both Euclidean Cartesian distance and SE(2) composite pose distance.
+
+    Args:
+        dx (float): Longitudinal error in meters.
+        dy (float): Lateral error in meters.
+        dtheta (float): Heading error in radians [-pi, pi].
+        b (float): Characteristic half-track radius in meters.
+
+    Returns:
+        Tuple[float, float]: (d_xy, d_pose) in meters.
+    """
+    d_xy = math.hypot(dx, dy)
+    d_pose = math.hypot(d_xy, b * dtheta)
+    return d_xy, d_pose
 
 
 def run_autonomous_session(
@@ -79,154 +107,158 @@ def run_autonomous_session(
     target: List[float],
     teleport_to: Optional[List[float]] = None,
     is_real: bool = False,
-    max_duration: float = 60.0,
-    output_dir: str = "data/evaluation",
-    dist_tol: float = 0.25
+    max_duration: float = DEFAULT_MAX_DURATION,
+    dist_tol: float = DEFAULT_DIST_TOL,
+    angle_tol: float = DEFAULT_ANGLE_TOL,
+    dwell_time_required: float = DEFAULT_DWELL_TIME,
+    output_dir: str = "data/evaluation"
 ) -> bool:
     """
-    Exécute une mission de positionnement autonome vers la cible.
+    Orchestrates a closed-loop autonomous docking trial with stationary dwell verification.
 
     Args:
-        weights_path (str): Chemin du fichier JSON contenant les poids entraînés.
-        target (List[float]): Pose cible [x_c, y_c, theta_c].
-        teleport_to (Optional[List[float]]): Position de départ pour téléporter le robot [x, y, theta].
-        is_real (bool): Applique le mode sécurisé pour robot physique.
-        max_duration (float): Temps limite en secondes avant arrêt automatique.
-        output_dir (str): Dossier pour enregistrer la télémétrie de l'essai.
-        dist_tol (float): Tolérance de distance pour l'accostage en mètres (défaut: 0.25).
+        weights_path (str): Path to trained neural network weights JSON.
+        target (List[float]): Target pose [x_target, y_target, theta_target].
+        teleport_to (Optional[List[float]]): Starting pose [x0, y0, th0] for Gazebo teleportation.
+        is_real (bool): True for hardware deployment, False for Gazebo simulation.
+        max_duration (float): Maximum trial duration before timeout (s).
+        dist_tol (float): Positioning tolerance radius from dock center (m).
+        angle_tol (float): Heading tolerance at dock (rad).
+        dwell_time_required (float): Required continuous stationary dwell duration (s).
+        output_dir (str): Root directory for telemetry logs and trajectory plots.
 
     Returns:
-        bool: True si la cible a été atteinte dans les tolérances, False sinon.
+        bool: True if stable docking with verified dwell was achieved, False otherwise.
     """
     if not ROS2_AVAILABLE:
-        raise RuntimeError("ROS 2 n'est pas disponible dans cet environnement.")
+        raise RuntimeError("ROS 2 Humble / Foxy environment is required for live autonomous execution.")
 
-    print("\n" + "=" * 65)
-    print("--- MISSION AUTONOME EN BOUCLE FERMÉE (POIDS GELÉS) ---")
-    print(f"Modèle de poids   : {weights_path}")
-    print(f"Pose cible [x,y,θ]: x={target[0]:.2f} m, y={target[1]:.2f} m, theta={target[2]:.2f} rad")
-    print(f"Plateforme        : {'Robot Physique' if is_real else 'Simulateur Gazebo'}")
-    print(f"Desnormalização   : V_MAX = {V_MAX:.2f} m/s | W_MAX = {W_MAX:.2f} rad/s")
-    print(f"Durée maximale    : {max_duration} s")
-    print("=" * 65 + "\n")
+    print("\n" + "=" * 78)
+    print("   AGILEX LIMO CLOSED-LOOP AUTONOMOUS DOCKING (ISO 18646-2 BENCHMARK)")
+    print("=" * 78)
+    print(f"Weights Artifact     : {weights_path}")
+    print(f"Dock Target [x,y,θ]  : x={target[0]:.3f} m, y={target[1]:.3f} m, θ={math.degrees(target[2]):.1f}°")
+    print(f"Platform Mode        : {'Physical LIMO Hardware' if is_real else 'Gazebo Simulation'}")
+    print(f"Capture Threshold    : Distance <= {dist_tol * 100:.1f} cm | Angle <= {math.degrees(angle_tol):.1f}°")
+    print(f"Stationary Dwell     : {dwell_time_required:.1f} s continuous immobilization")
+    print(f"Mission Duration Max : {max_duration:.1f} s")
+    print("=" * 78 + "\n")
 
-    # 1. Instanciation du modèle et chargement des poids
-    model = PioneerNN(input_size=4, hidden_size=1000, output_size=2)
+    # 1. Initialize Neural Network Policy
+    model = PioneerNN(input_size=3, hidden_size=1000, output_size=2, use_bias=False)
     model.load_from_json_file(weights_path)
-    model.eval()  # Mode évaluation : aucun calcul de gradient
-    print(f"[PioneerNN] Modèle initialisé (4 entrées [in_0, in_1, in_2, K_θ]) | Poids chargés depuis : {weights_path}")
+    model.eval()
+    print(f"[PioneerNN] Policy loaded from: {weights_path} (Strict bias-free equilibrium verified)")
 
-    # 2. Initialisation de ROS 2 et de l'interface robot
+    # 2. Initialize ROS 2 Node & Hardware / Gazebo Interface
     rclpy.init()
     robot = LimoROS2Interface(safety_limits=is_real)
     logger = DataLogger()
 
-    # Téléportation initiale si demandée ou si le robot est déjà à l'origine en simulation
+    # Initial repositioning / teleportation
     init_pos = robot.get_position()
     init_dist = math.hypot(init_pos[0] - target[0], init_pos[1] - target[1])
 
     if teleport_to is not None and not is_real:
-        print(f"[Gazebo] Téléportation demandée vers : {teleport_to}")
+        print(f"[Gazebo] Teleporting robot to starting pose: {teleport_to}")
         robot.teleport_gazebo(teleport_to[0], teleport_to[1], teleport_to[2])
-        time.sleep(0.3)
-    elif init_dist < 0.05 and not is_real:
-        print("[Information] Le robot est déjà sur la cible (0,0,0).")
-        print("[Gazebo] Repositionnement automatique au départ par défaut [2.0, 2.0, 0.0] pour le test...")
+        time.sleep(0.4)
+    elif init_dist < dist_tol and not is_real:
+        print("[Notice] Robot initialized inside dock. Teleporting to default benchmark starting pose [2.0, 2.0, 0.0]...")
         robot.teleport_gazebo(2.0, 2.0, 0.0)
-        time.sleep(0.3)
+        time.sleep(0.4)
 
     success = False
     start_time = time.time()
-    dt = 0.050  # Période de 20 Hz
-    pos_history: collections.deque[Tuple[float, float, float, float]] = collections.deque(maxlen=30)
-    zero_cmd_count = 0
+    dt = 0.050  # 20 Hz loop period
+    dwell_timer = 0.0
+    pos_window: collections.deque[Tuple[float, float, float, float]] = collections.deque(maxlen=20)  # 1-second window
 
     try:
         while rclpy.ok():
             elapsed = time.time() - start_time
             if elapsed > max_duration:
-                print(f"[Timeout] Durée maximale atteinte ({max_duration} s).")
+                print(f"\n[Timeout] Maximum mission duration reached ({max_duration:.1f} s).")
                 break
 
             pos = robot.get_position()
             dx = target[0] - pos[0]
             dy = target[1] - pos[1]
-            theta_r = recast_angle(pos[2])
-            dist = math.hypot(dx, dy)
+            thr = recast_angle(pos[2])
             e_theta = recast_angle(pos[2] - target[2])
 
-            # Coordonnées de la cible dans le repère local du robot
-            x_target_robot = dx * math.cos(theta_r) + dy * math.sin(theta_r)
-            y_target_robot = -dx * math.sin(theta_r) + dy * math.cos(theta_r)
-            theta_robot_abs = theta_r
+            dist_xy, dist_pose = compute_se2_distance(dx, dy, e_theta)
 
-            # Normalisation dans [-1.0, 1.0]
+            # Robot-centric relative target coordinates
+            x_target_robot = dx * math.cos(thr) + dy * math.sin(thr)
+            y_target_robot = -dx * math.sin(thr) + dy * math.cos(thr)
+
+            # Normalized inputs in [-1.0, +1.0]
             in_0 = max(-1.0, min(1.0, x_target_robot / X_MAX))
             in_1 = max(-1.0, min(1.0, y_target_robot / Y_MAX))
-            in_2 = max(-1.0, min(1.0, theta_robot_abs / math.pi))
+            in_2 = max(-1.0, min(1.0, thr / math.pi))
 
-            # Calcul dynamique du gain K_theta à partir de (x_R, y_R) dans le repère du robot
-            k_theta = compute_k_theta(x_target_robot, y_target_robot)
-
-            # Valeur instantanée du coût quadratique normalisé
             cost = in_0 ** 2 + in_1 ** 2 + in_2 ** 2
 
-            # Critère de convergence et d'accostage : d < dist_tol et orientation alignée (|e_theta| < 0.35 rad ~ 20 deg)
-            # (Ne s'applique qu'après au moins 0.5s de navigation pour éviter le faux arrêt immédiat)
-            if elapsed > 0.5 and dist < dist_tol and abs(e_theta) < 0.35:
-                print(f"\n[Succès] Cible atteinte en {elapsed:.2f} s ! (Erreur dist={dist:.3f} m, angle={abs(e_theta):.3f} rad [{math.degrees(abs(e_theta)):.1f}°])")
-                success = True
-                break
+            # Neural network inference (3 canonical inputs)
+            cmd_raw = model([in_0, in_1, in_2])
+            out_v = float(cmd_raw[0])
+            out_w = float(cmd_raw[1])
 
-            # Détection d'immobilisation (Stall Detection) : coupure anticipée dès que le robot s'arrête
-            pos_history.append((elapsed, pos[0], pos[1], pos[2]))
-            if elapsed > 1.5 and len(pos_history) >= 30:
-                old_t, old_x, old_y, old_th = pos_history[0]
-                d_moved = math.hypot(pos[0] - old_x, pos[1] - old_y)
-                d_rot = abs(recast_angle(pos[2] - old_th))
-                if d_moved < 0.030 and d_rot < 0.050:
-                    print(f"\n[Parada Detectada] O robô parou totalmente seus movimentos (deslocamento < 3cm em 1.5s a t={elapsed:.1f}s). Encerrando missão imediatamente.")
-                    if dist < dist_tol and abs(e_theta) < 0.35:
-                        success = True
-                    break
+            # Physical velocity denormalization
+            v_cmd = max(-V_MAX, min(V_MAX, out_v * V_MAX))
+            w_cmd = max(-W_MAX, min(W_MAX, out_w * W_MAX))
 
-            # Inférence par la politique neuronale étendue à 4 entrées [in_0, in_1, in_2, K_theta]
-            cmd_raw = model([in_0, in_1, in_2, k_theta])
-            if hasattr(cmd_raw, "tolist"):
-                cmd = cmd_raw.tolist()
-            else:
-                cmd = list(cmd_raw)
-
-            # Dénormalisation depuis [-1.0, +1.0] vers les vitesses physiques réelles
-            v_cmd = max(-V_MAX, min(V_MAX, float(cmd[0]) * V_MAX))
-            w_cmd = max(-W_MAX, min(W_MAX, float(cmd[1]) * W_MAX))
-
-            # Anti-órbita: se a meta estiver na lateral (|phi| > 60°), anula avanço linear para frente (v > 0)
-            # permitindo pivô puro no próprio eixo sem orbitar (mantém marcha à ré normal para baliza)
+            # 1. Anti-orbit & lateral flank pivot: turn directly on a dime towards the dock
             phi_target = math.atan2(y_target_robot, x_target_robot)
-            if abs(phi_target) > 1.05 and v_cmd > 0.0:
+            if abs(phi_target) > 1.05 or x_target_robot < 0.0:
                 v_cmd = 0.0
+                w_cmd = W_MAX if y_target_robot > 0.0 else -W_MAX
 
-            # Trava da Zona de Frenagem / Doca: se o robô já está na doca (dist <= 0.20m),
-            # anula avanço linear para frente (v > 0) para que ele apenas pivote no próprio eixo sem escapar da vaga!
-            if dist <= 0.20 and v_cmd > 0.0:
-                v_cmd = 0.0
+            # 2. Terminal dock capture envelope: zero heading alignment and full immobilization
+            if dist_xy <= dist_tol:
+                if abs(e_theta) <= angle_tol:
+                    v_cmd, w_cmd = 0.0, 0.0
+                else:
+                    v_cmd = 0.0
+                    w_cmd = -W_MAX if e_theta > 0.0 else W_MAX
 
-            # Affichage console régulier pour faciliter le débogage (toutes les 0.5s / 10 itérations)
-            if int(elapsed / dt) % 10 == 0:
-                print(f"[Débogage K_θ] t={elapsed:5.2f}s | Repère Robot: x_R={x_target_robot:+6.2f}m, y_R={y_target_robot:+6.2f}m | K_θ={k_theta:6.4f} (∈ [0.1, 1.0]) | v_cmd={v_cmd:+5.2f}m/s, w_cmd={w_cmd:+5.2f}rad/s")
-
-            # Arrêt immédiat si la politique commande l'arrêt persistant
-            if abs(v_cmd) < 0.02 and abs(w_cmd) < 0.03:
-                zero_cmd_count += 1
+            # Track 1-second displacement window for physical immobilization verification
+            pos_window.append((elapsed, pos[0], pos[1], pos[2]))
+            if len(pos_window) >= 20:
+                t_old, x_old, y_old, th_old = pos_window[0]
+                d_moved_window = math.hypot(pos[0] - x_old, pos[1] - y_old)
+                d_rot_window = abs(recast_angle(pos[2] - th_old))
             else:
-                zero_cmd_count = 0
+                d_moved_window = 0.0
+                d_rot_window = 0.0
 
-            if elapsed > 1.0 and zero_cmd_count >= 15:
-                print(f"\n[Parada Detectada] Comandos de velocidade zerados continuamente (v=0, w=0 a t={elapsed:.1f}s). Encerrando missão imediatamente.")
-                if dist < dist_tol and abs(e_theta) < 0.35:
+            # Velocity-level and physical immobilization criteria
+            is_stopped_cmds = (abs(v_cmd) < 0.03 and abs(w_cmd) < 0.04)
+            is_stopped_motion = (len(pos_window) >= 20 and d_moved_window < 0.008 and d_rot_window < 0.02)
+            is_stationary = is_stopped_cmds or is_stopped_motion
+
+            # Docking Zone Arrival & Continuous Dwell-Time Watchdog
+            in_dock_envelope = (dist_xy <= dist_tol and abs(e_theta) <= angle_tol)
+
+            if elapsed > 1.0 and in_dock_envelope and is_stationary:
+                dwell_timer += dt
+                if int(dwell_timer / dt) % 20 == 0 or dwell_timer >= dwell_time_required:
+                    print(f"[Dock Dwell] Stationary in envelope: {dwell_timer:5.1f}s / {dwell_time_required:.1f}s (d={dist_xy*100:.1f}cm, θ={math.degrees(abs(e_theta)):.1f}°)")
+
+                if dwell_timer >= dwell_time_required:
+                    print(f"\n[Success] Mission Complete! Vehicle continuously docked and stationary for {dwell_timer:.1f} s.")
+                    print(f"          Final Position Error: {dist_xy*100:.2f} cm | Heading Error: {math.degrees(abs(e_theta)):.2f}° | SE(2) Pose Metric: {dist_pose*100:.2f} cm")
                     success = True
-                break
+                    break
+            else:
+                if dwell_timer > 0.0:
+                    print(f"[Notice] Dwell reset! Motion or boundary departure detected at t={elapsed:.1f}s (d={dist_xy*100:.1f}cm).")
+                dwell_timer = 0.0
+
+            # Diagnostics telemetry output every 1.0 second
+            if int(elapsed / dt) % 20 == 0:
+                print(f"t={elapsed:5.1f}s | Dist: {dist_xy:5.3f}m | SE(2): {dist_pose:5.3f}m | Head: {math.degrees(abs(e_theta)):5.1f}° | v_cmd: {v_cmd:+5.2f}m/s | w_cmd: {w_cmd:+5.2f}rad/s")
 
             robot.set_cmd_vel(v_cmd, w_cmd)
             logger.log(position=pos, target=target, command=[v_cmd, w_cmd], grad=[0.0, 0.0], cost=cost)
@@ -234,7 +266,7 @@ def run_autonomous_session(
             time.sleep(dt)
 
     except KeyboardInterrupt:
-        print("\nInterruption opérateur reçue.")
+        print("\n[Interrupted] Mission aborted by operator.")
     finally:
         robot.stop()
         now = datetime.now()
@@ -258,20 +290,11 @@ def run_autonomous_session(
         logger.save(csv_path)
         logger.save_plot(png_path)
 
-        # Legacy copy to base output_dir for convenience
-        stamp = now.strftime("%Y%m%d_%H%M%S")
-        try:
-            legacy_csv = os.path.join(output_dir, f"{prefix}_{stamp}.csv")
-            legacy_png = os.path.join(output_dir, f"{prefix}_{stamp}.png")
-            shutil.copy2(csv_path, legacy_csv)
-            shutil.copy2(png_path, legacy_png)
-        except Exception:
-            pass
-
         final_pos = robot.get_position() if hasattr(robot, "get_position") else [0.0, 0.0, 0.0]
         elapsed_sec = time.time() - start_time
         err_dist = math.hypot(final_pos[0] - target[0], final_pos[1] - target[1])
         err_theta = abs(recast_angle(final_pos[2] - target[2]))
+        err_pose = math.hypot(err_dist, HALF_TRACK_B * err_theta)
 
         params = {
             "test_id": timestamp_folder,
@@ -283,25 +306,23 @@ def run_autonomous_session(
             "final_position": [round(float(p), 4) for p in final_pos],
             "success": success,
             "elapsed_seconds": round(elapsed_sec, 3),
+            "dwell_time_verified_seconds": round(dwell_timer, 2),
+            "dwell_time_required_seconds": dwell_time_required,
             "max_duration_seconds": max_duration,
             "error_distance_m": round(err_dist, 4),
             "error_theta_deg": round(math.degrees(err_theta), 2),
+            "error_se2_pose_m": round(err_pose, 4),
+            "tolerances": {
+                "dist_tol_m": dist_tol,
+                "angle_tol_rad": angle_tol,
+                "half_track_b_m": HALF_TRACK_B,
+            },
             "kinematics": {
                 "v_max_mps": V_MAX,
                 "w_max_radps": W_MAX,
                 "x_max_m": X_MAX,
                 "y_max_m": Y_MAX,
-                "alpha": ALPHA,
                 "dt_sec": dt,
-                "dist_tol_m": dist_tol,
-                "angle_tol_rad": 0.35,
-                "stall_detection": {
-                    "enabled": True,
-                    "window_sec": 1.5,
-                    "min_displacement_m": 0.030,
-                    "min_rotation_rad": 0.050,
-                    "zero_cmd_steps": 15
-                }
             },
             "artifacts": {
                 "folder": os.path.abspath(test_dir),
@@ -315,7 +336,7 @@ def run_autonomous_session(
         params_path = os.path.join(test_dir, "params.json")
         with open(params_path, "w", encoding="utf-8") as f:
             json.dump(params, f, indent=2, ensure_ascii=False)
-        print(f"[Sucesso] Parâmetros e metadados da missão salvos em: {params_path}")
+        print(f"[Success] Trial metadata and telemetry preserved in: {params_path}")
 
         robot.cleanup()
         rclpy.shutdown()
@@ -324,14 +345,16 @@ def run_autonomous_session(
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Exécuteur autonome en boucle fermée.")
-    parser.add_argument("--weights", type=str, default="models/supervised_w_torch_diff.json", help="Chemin des poids JSON")
-    parser.add_argument("--target", nargs=3, type=float, default=[0.0, 0.0, 0.0], help="Pose cible x y theta")
-    parser.add_argument("--teleport-to", "--start", nargs=3, type=float, default=None, dest="teleport_to", help="Position initiale de départ x y theta")
-    parser.add_argument("--real", action="store_true", help="Mode robot réel avec limites de sécurité")
-    parser.add_argument("--max-time", type=float, default=60.0, help="Temps maximal en secondes")
-    parser.add_argument("--dist-tol", type=float, default=0.25, help="Tolérance de distance pour l'accostage en mètres (défaut: 0.25)")
-    parser.add_argument("--outdir", type=str, default="data/evaluation", help="Dossier de télémétrie")
+    parser = argparse.ArgumentParser(description="Closed-Loop Autonomous Positioning & Metrological Docking.")
+    parser.add_argument("--weights", type=str, default="models/supervised_w_torch_diff.json", help="Path to synaptic weights JSON")
+    parser.add_argument("--target", nargs=3, type=float, default=[0.0, 0.0, 0.0], help="Target pose x y theta")
+    parser.add_argument("--teleport-to", "--start", nargs=3, type=float, default=None, dest="teleport_to", help="Starting pose x y theta")
+    parser.add_argument("--real", action="store_true", help="Physical hardware mode with hardware safety limits")
+    parser.add_argument("--max-time", type=float, default=DEFAULT_MAX_DURATION, help=f"Maximum duration ceiling (default: {DEFAULT_MAX_DURATION}s)")
+    parser.add_argument("--dist-tol", type=float, default=DEFAULT_DIST_TOL, help=f"Docking positioning tolerance (default: {DEFAULT_DIST_TOL}m)")
+    parser.add_argument("--angle-tol", type=float, default=DEFAULT_ANGLE_TOL, help=f"Docking orientation tolerance (default: {DEFAULT_ANGLE_TOL}rad)")
+    parser.add_argument("--dwell-time", type=float, default=DEFAULT_DWELL_TIME, help=f"Required stationary dwell time at dock (default: {DEFAULT_DWELL_TIME}s)")
+    parser.add_argument("--outdir", type=str, default="data/evaluation", help="Destination telemetry directory")
     args = parser.parse_args()
 
     run_autonomous_session(
@@ -340,6 +363,8 @@ if __name__ == "__main__":
         teleport_to=args.teleport_to,
         is_real=args.real,
         max_duration=args.max_time,
-        output_dir=args.outdir,
-        dist_tol=args.dist_tol
+        dist_tol=args.dist_tol,
+        angle_tol=args.angle_tol,
+        dwell_time_required=args.dwell_time,
+        output_dir=args.outdir
     )

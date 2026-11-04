@@ -22,17 +22,7 @@ import json
 import math
 from typing import Tuple, List, Dict, Any
 
-# Auto-detecção de pacotes locais e snap
-_py_ver = f"{sys.version_info.major}.{sys.version_info.minor}"
-for _p in [
-    f"/home/juliapivato/snap/antigravity-cli/common/local/lib/python{_py_ver}/dist-packages",
-    os.path.expanduser(f"~/snap/antigravity-cli/common/local/lib/python{_py_ver}/dist-packages"),
-    os.path.expanduser(f"~/local/lib/python{_py_ver}/dist-packages"),
-    os.path.expanduser(f"~/.local/lib/python{_py_ver}/site-packages"),
-]:
-    if os.path.exists(_p) and _p not in sys.path:
-        sys.path.insert(0, _p)
-
+# Dynamic project root resolution
 _project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
@@ -70,7 +60,7 @@ Y_MAX = 5.0   # Limite da arena em Y (m)
 def load_dataset_and_predict(dataset_path: str, weights_path: str):
     """Carrega dados, executa inferência e retorna alvos e predições normalizadas."""
     print(f"1. Carregando modelo : {weights_path}")
-    model = PioneerNN(input_size=4, hidden_size=1000, output_size=2, use_bias=False)
+    model = PioneerNN(input_size=3, hidden_size=1000, output_size=2, use_bias=False)
     model.load_from_json_file(weights_path)
     model.eval()
 
@@ -105,7 +95,7 @@ def load_dataset_and_predict(dataset_path: str, weights_path: str):
                 norm_v = max(-1.0, min(1.0, raw_v / V_MAX))
                 norm_w = max(-1.0, min(1.0, raw_w / W_MAX))
 
-                inputs.append([in_0, in_1, in_2, k_th])
+                inputs.append([in_0, in_1, in_2])
                 targets_v.append(norm_v)
                 targets_w.append(norm_w)
                 coords_x.append(xr)

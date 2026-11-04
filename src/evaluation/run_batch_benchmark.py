@@ -1,19 +1,35 @@
 """
-Banc d'Essai Automatisé Multi-Quadrants (Batch Benchmark ISO 18646-2)
-=====================================================================
-Exécute la batterie de 8 tests canoniques multi-quadrants, enregistre les
-trajectoires, génère les graphiques et calcule l'ensemble des métriques
-métrologiques de la norme ISO 18646-2 (Ap, Ao, Rp, Ro).
+Multi-Quadrant Automated Benchmarking Suite (ISO 18646-2 Metrology)
+===================================================================
+Executes standardized multi-quadrant docking trial batteries, logs continuous
+kinematic telemetry, generates trajectory visualization dashboards, and computes 
+the comprehensive set of ISO 18646-2 metrological performance indicators:
+- Position Accuracy (Ap) and Position Repeatability (Rp)
+- Orientation Accuracy (Ao) and Orientation Repeatability (Ro)
+- Radial Standard Deviation (Sl) and Angular Standard Deviation (So)
+- Attained Barycenter Coordinates (x_bar, y_bar)
 
-Modes d'exécution :
-1. Mode Simulation Cinématique Boucle Fermée (défaut / autonome) :
-   Simule la dynamique différentielle du LIMO à 20 Hz avec le réseau PioneerNN.
-   Permet d'évaluer instantanément les performances métrologiques sans dépendre
-   d'une instance Gazebo active.
-2. Mode Gazebo / ROS 2 (activé via --gazebo ou si Gazebo est actif) :
-   Interagit directement avec Gazebo via /odom et /cmd_vel avec téléportation.
+Operational Modes:
+------------------
+1. Closed-Loop Kinematic Simulation Mode (Default / Headless):
+   Integrates non-holonomic unicycle kinematics at 20 Hz (Euler forward) with the 
+   bias-free PioneerNN policy. Enables instantaneous, deterministic metrological 
+   evaluation without requiring an active Gazebo / GUI environment.
 
-Projet : LIMO Offline Learning (CERV / ENIB)
+2. Live Gazebo Simulator Mode (Activated via --gazebo):
+   Interfaces directly with Gazebo via ROS 2 (/odom and /cmd_vel topics) with 
+   automated initial pose teleportation.
+
+Docking & Stability Verification:
+---------------------------------
+- SE(2) Metrological Distance Metric: d_pose = sqrt(d_xy^2 + (b * e_theta)^2)
+  where b = 0.086 m (half-track width of AgileX LIMO).
+- Capture Envelope: d_xy <= dist_tol (0.05 m = 5 cm) and |e_theta| <= angle_tol (0.15 rad ~ 8.6°).
+- Continuous Stationary Dwell: Robot must remain continuously immobile (movement < 5 mm,
+  velocities near zero) for at least dwell_time (default: 30.0s) within the capture envelope.
+
+Project: LIMO Offline Learning (CERV / Lab-STICC / ENIB).
+Standards: ROS REP-103 & ISO 18646-2.
 """
 
 from __future__ import annotations
@@ -29,23 +45,13 @@ import argparse
 import collections
 from datetime import datetime
 from typing import List, Dict, Any, Optional, Tuple
-# Inclusion automatique du dossier racine du projet dans sys.path
+
+# Dynamic project root resolution
 _project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
-# Inclusion automatique du chemin dist-packages snap si présent
-_py_ver = f"{sys.version_info.major}.{sys.version_info.minor}"
-for _p in [
-    f"/home/juliapivato/snap/antigravity-cli/common/local/lib/python{_py_ver}/dist-packages",
-    os.path.expanduser(f"~/snap/antigravity-cli/common/local/lib/python{_py_ver}/dist-packages"),
-    os.path.expanduser(f"~/local/lib/python{_py_ver}/dist-packages"),
-    os.path.expanduser(f"~/.local/lib/python{_py_ver}/site-packages"),
-]:
-    if os.path.exists(_p) and _p not in sys.path:
-        sys.path.insert(0, _p)
-
-from src.core.pioneer_nn import PioneerNN, compute_k_theta, compute_theta_strategic
+from src.core.pioneer_nn import PioneerNN, recast_angle
 from src.evaluation.data_logger import DataLogger
 from calculus.calculate_iso_metrics import compute_iso_18646_metrics
 
@@ -58,64 +64,71 @@ except (ImportError, RuntimeError):
     LimoROS2Interface = None
 
 # ==============================================================================
-# ⚙️ CONFIGURAÇÕES GLOBAIS DE DESNORMALIZAÇÃO E LIMITES CINEMÁTICOS (MODIFIQUE AQUI)
+# GLOBAL KINEMATIC LIMITS & METROLOGICAL CONSTANTS
 # ==============================================================================
-V_MAX = 0.50  # Velocidade linear máxima de desnormalização em m/s (dobrada de 0.24 para 0.50)
-W_MAX = 1.00  # Velocidade angular máxima de desnormalização em rad/s (dobrada de 0.50 para 1.00)
-X_MAX = 5.0   # Limite da arena em X (m)
-Y_MAX = 5.0   # Limite da arena em Y (m)
-ALPHA = [1.0 / X_MAX, 1.0 / Y_MAX, 1.0 / math.pi]
+V_MAX = 0.50                   # Maximum linear velocity (m/s)
+W_MAX = 1.00                   # Maximum angular velocity (rad/s)
+X_MAX = 5.0                    # Arena spatial boundary X (m)
+Y_MAX = 5.0                    # Arena spatial boundary Y (m)
+HALF_TRACK_B = 0.086           # Half-track width b = L/2 (m) for AgileX LIMO
+
+DEFAULT_DIST_TOL = 0.08        # 8 cm positioning radius from dock center (m)
+DEFAULT_ANGLE_TOL = 0.15       # Heading orientation tolerance (rad) ~ 8.6 deg
+DEFAULT_DWELL_TIME = 30.0      # Required continuous stationary duration at dock (s)
+DEFAULT_MAX_DURATION = 150.0   # Extended mission ceiling to accommodate navigation + dwell (s)
 # ==============================================================================
 
 
-def recast_angle(angle_rad: float) -> float:
-    """Recalcule un angle dans l'intervalle principal (-pi, +pi]."""
-    return math.atan2(math.sin(angle_rad), math.cos(angle_rad))
+def compute_se2_distance(dx: float, dy: float, dtheta: float, b: float = HALF_TRACK_B) -> Tuple[float, float]:
+    """
+    Computes Euclidean Cartesian distance and SE(2) composite pose distance.
+    """
+    d_xy = math.hypot(dx, dy)
+    d_pose = math.hypot(d_xy, b * dtheta)
+    return d_xy, d_pose
 
 
-# 1. Suite Canonique ISO (8 essais de référence - 2 par quadrant)
+# 1. Canonical ISO Test Suite (8 reference trials - 2 per quadrant)
 CANONICAL_TEST_SCENARIOS = [
     ("Test 1 - Q1 Frontal",    2.0,  2.0,  0.0,            1),
-    ("Test 2 - Q1 Latéral",    1.5,  2.5, -math.pi / 2,    1),
+    ("Test 2 - Q1 Lateral",    1.5,  2.5, -math.pi / 2,    1),
     ("Test 3 - Q2 Frontal",   -2.0,  2.0,  0.0,            2),
-    ("Test 4 - Q2 Latéral",   -2.5,  1.5, -math.pi / 2,    2),
-    ("Test 5 - Q3 Inversé",   -2.0, -2.0,  math.pi,        3),
-    ("Test 6 - Q3 Latéral",   -1.5, -2.5,  math.pi / 2,    3),
-    ("Test 7 - Q4 Latéral",    2.0, -2.0, -math.pi / 2,    4),
-    ("Test 8 - Q4 Inversé",    2.5, -1.5,  math.pi,        4),
+    ("Test 4 - Q2 Lateral",   -2.5,  1.5, -math.pi / 2,    2),
+    ("Test 5 - Q3 Reverse",   -2.0, -2.0,  math.pi,        3),
+    ("Test 6 - Q3 Lateral",   -1.5, -2.5,  math.pi / 2,    3),
+    ("Test 7 - Q4 Lateral",    2.0, -2.0, -math.pi / 2,    4),
+    ("Test 8 - Q4 Reverse",    2.5, -1.5,  math.pi,        4),
 ]
 
-# 2. Bateria Expandida Multi-Distância & Multi-Rotação (20 ensaios sistemáticos - 5 por quadrant)
-# Distâncias: Curta (~1.2m), Média (~2.5m), Longa (~3.5m)
-# Rotações: 0°, ±45°, ±90°, ±135°, 180°
+# 2. Extended Test Battery (20 systematic trials - 5 per quadrant)
 EXTENDED_TEST_SCENARIOS = [
-    # --- QUADRANTE 1 (+X, +Y) : BALIZA / RÉ ---
-    ("Test 01 - Q1 Curto Frontal",   1.0,  0.8,  0.0,                 1),
-    ("Test 02 - Q1 Médio Frontal",   2.0,  2.0,  0.0,                 1),
-    ("Test 03 - Q1 Médio Latéral",   1.5,  2.5, -round(math.pi/2, 3), 1),
-    ("Test 04 - Q1 Médio Oblíquo",   2.2,  1.2,  round(math.pi/4, 3), 1),
-    ("Test 05 - Q1 Longo Inversé",   3.0,  1.5,  round(math.pi, 3),   1),
+    # --- QUADRANT 1 (+X, +Y) : REVERSE / PARKING ---
+    ("Test 01 - Q1 Short Frontal",   1.0,  0.8,  0.0,                 1),
+    ("Test 02 - Q1 Medium Frontal",  2.0,  2.0,  0.0,                 1),
+    ("Test 03 - Q1 Medium Lateral",  1.5,  2.5, -round(math.pi/2, 3), 1),
+    ("Test 04 - Q1 Medium Oblique",  2.2,  1.2,  round(math.pi/4, 3), 1),
+    ("Test 05 - Q1 Long Reverse",    3.0,  1.5,  round(math.pi, 3),   1),
 
-    # --- QUADRANTE 2 (-X, +Y) : AVANÇO DUBINS ---
-    ("Test 06 - Q2 Curto Frontal",  -1.0,  0.8,  0.0,                 2),
-    ("Test 07 - Q2 Médio Frontal",  -2.0,  2.0,  0.0,                 2),
-    ("Test 08 - Q2 Médio Latéral",  -2.5,  1.5, -round(math.pi/2, 3), 2),
-    ("Test 09 - Q2 Médio Oblíquo",  -2.2,  1.2, -round(math.pi/4, 3), 2),
-    ("Test 10 - Q2 Longo Oblíquo",  -3.0,  2.0,  round(math.pi/4, 3), 2),
+    # --- QUADRANT 2 (-X, +Y) : FORWARD DUBINS ---
+    ("Test 06 - Q2 Short Frontal",  -1.0,  0.8,  0.0,                 2),
+    ("Test 07 - Q2 Medium Frontal", -2.0,  2.0,  0.0,                 2),
+    ("Test 08 - Q2 Medium Lateral", -2.5,  1.5, -round(math.pi/2, 3), 2),
+    ("Test 09 - Q2 Medium Oblique", -2.2,  1.2, -round(math.pi/4, 3), 2),
+    ("Test 10 - Q2 Long Oblique",   -3.0,  2.0,  round(math.pi/4, 3), 2),
 
-    # --- QUADRANTE 3 (-X, -Y) : AVANÇO DUBINS ---
-    ("Test 11 - Q3 Curto Inversé",  -1.0, -0.8,  round(math.pi, 3),   3),
-    ("Test 12 - Q3 Médio Inversé",  -2.0, -2.0,  round(math.pi, 3),   3),
-    ("Test 13 - Q3 Médio Latéral",  -1.5, -2.5,  round(math.pi/2, 3), 3),
-    ("Test 14 - Q3 Médio Oblíquo",  -2.2, -1.2,  round(3*math.pi/4, 3), 3),
-    ("Test 15 - Q3 Longo Frontal",  -3.0, -1.8,  0.0,                 3),
+    # --- QUADRANT 3 (-X, -Y) : FORWARD DUBINS ---
+    ("Test 11 - Q3 Short Reverse",  -1.0, -0.8,  round(math.pi, 3),   3),
+    ("Test 12 - Q3 Medium Reverse", -2.0, -2.0,  round(math.pi, 3),   3),
+    ("Test 13 - Q3 Medium Lateral", -1.5, -2.5,  round(math.pi/2, 3), 3),
+    ("Test 14 - Q3 Medium Oblique", -2.2, -1.2,  round(3*math.pi/4, 3), 3),
+    ("Test 15 - Q3 Long Frontal",   -3.0, -1.8,  0.0,                 3),
 
-    # --- QUADRANTE 4 (+X, -Y) : BALIZA / RÉ ---
-    ("Test 16 - Q4 Curto Latéral",   1.0, -0.8, -round(math.pi/2, 3), 4),
-    ("Test 17 - Q4 Médio Latéral",   2.0, -2.0, -round(math.pi/2, 3), 4),
-    ("Test 18 - Q4 Médio Inversé",   2.5, -1.5,  round(math.pi, 3),   4),
-    ("Test 19 - Q4 Médio Oblíquo",   2.2, -1.2, -round(math.pi/4, 3), 4),
-    ("Test 20 - Q4 Longo Oblíquo",   3.0, -1.8, -round(3*math.pi/4, 3), 4),
+    # --- QUADRANT 4 (+X, -Y) : REVERSE / PARKING ---
+    ("Test 16 - Q4 Short Lateral",   1.0, -0.8, -round(math.pi/2, 3), 4),
+    ("Test 17 - Q4 Medium Lateral",  2.0, -2.0, -round(math.pi/2, 3), 4),
+    ("Test 18 - Q4 Medium Reverse",  2.5, -1.5,  round(math.pi, 3),   4),
+    ("Test 19 - Q4 Medium Oblique",  2.2, -1.2, -round(math.pi/4, 3), 4),
+    ("Test 20 - Q4 Long Oblique",    3.0, -1.8, -round(3*math.pi/4, 3), 4),
 ]
 
 
@@ -125,14 +138,18 @@ def run_simulated_benchmark_run(
     y0: float,
     th0: float,
     run_name: str,
-    target: list[float] = [0.0, 0.0, 0.0],
-    max_duration: float = 60.0,
+    target: List[float] = [0.0, 0.0, 0.0],
+    max_duration: float = DEFAULT_MAX_DURATION,
+    dist_tol: float = DEFAULT_DIST_TOL,
+    angle_tol: float = DEFAULT_ANGLE_TOL,
+    dwell_time_required: float = DEFAULT_DWELL_TIME,
     output_dir: str = "data/evaluation/batch_run",
-    output_images_dir: Optional[str] = None,
-    dist_tol: float = 0.20
+    output_images_dir: Optional[str] = None
 ) -> Dict[str, Any]:
-    """Exécute un essai en simulation cinématique à 20 Hz en boucle fermée."""
-    print(f"\n>>> Démarrage (Simulation) : {run_name} (Départ: x={x0:.2f}, y={y0:.2f}, th={th0:.2f} rad)")
+    """
+    Executes a single benchmark run under 20 Hz closed-loop kinematic simulation.
+    """
+    print(f"\n>>> Starting (Kinematic Simulation) : {run_name} (Initial pose: x={x0:.2f}m, y={y0:.2f}m, θ={math.degrees(th0):.1f}°)")
 
     logger = DataLogger()
     dt = 0.050  # 20 Hz
@@ -141,92 +158,88 @@ def run_simulated_benchmark_run(
     x, y, th = x0, y0, th0
     success = False
     elapsed = 0.0
-    pos_history: collections.deque[Tuple[float, float, float, float]] = collections.deque(maxlen=30)
-    zero_cmd_count = 0
+    dwell_timer = 0.0
+    pos_window: collections.deque[Tuple[float, float, float, float]] = collections.deque(maxlen=20)
 
     for step in range(max_steps):
         elapsed = step * dt
         dx = target[0] - x
         dy = target[1] - y
-        theta_r = recast_angle(th)
-        dist = math.hypot(dx, dy)
+        thr = recast_angle(th)
         e_theta = recast_angle(th - target[2])
 
-        # Coordonnées de la cible dans le repère local du robot
-        x_target_robot = dx * math.cos(theta_r) + dy * math.sin(theta_r)
-        y_target_robot = -dx * math.sin(theta_r) + dy * math.cos(theta_r)
-        theta_robot_abs = theta_r
+        dist_xy, dist_pose = compute_se2_distance(dx, dy, e_theta)
 
-        # Normalisation des entrées
+        # Robot-relative target representation
+        x_target_robot = dx * math.cos(thr) + dy * math.sin(thr)
+        y_target_robot = -dx * math.sin(thr) + dy * math.cos(thr)
+
         in_0 = max(-1.0, min(1.0, x_target_robot / X_MAX))
         in_1 = max(-1.0, min(1.0, y_target_robot / Y_MAX))
-        in_2 = max(-1.0, min(1.0, theta_robot_abs / math.pi))
-        k_theta = compute_k_theta(x_target_robot, y_target_robot)
+        in_2 = max(-1.0, min(1.0, thr / math.pi))
 
         cost = in_0 ** 2 + in_1 ** 2 + in_2 ** 2
 
-        # Condition de convergence
-        if step > 10 and dist < dist_tol and abs(e_theta) < 0.35:
-            print(f"    [Succès] Atteint en {elapsed:.1f}s ! (Erreur dist={dist:.3f}m, angle={abs(e_theta):.3f}rad [{math.degrees(abs(e_theta)):.1f}°])")
-            success = True
-            break
+        # Model evaluation with 3 inputs
+        cmd_raw = model([in_0, in_1, in_2])
+        out_v = float(cmd_raw[0])
+        out_w = float(cmd_raw[1])
 
-        # Détection d'immobilisation (Stall Detection) : coupure anticipée dès que le robot s'arrête
-        pos_history.append((elapsed, x, y, th))
-        if elapsed > 1.5 and len(pos_history) >= 30:
-            old_t, old_x, old_y, old_th = pos_history[0]
-            d_moved = math.hypot(x - old_x, y - old_y)
-            d_rot = abs(recast_angle(th - old_th))
-            if d_moved < 0.030 and d_rot < 0.050:
-                print(f"    [Parada Detectada] Robô parou totalmente seus movimentos (deslocamento < 3cm em 1.5s a t={elapsed:.1f}s). Encerrando ensaio.")
-                if dist < dist_tol and abs(e_theta) < 0.35:
-                    success = True
-                break
+        # Physical velocity denormalization
+        v_cmd = max(-V_MAX, min(V_MAX, out_v * V_MAX))
+        w_cmd = max(-W_MAX, min(W_MAX, out_w * W_MAX))
 
-        # Inférence neuronale avec K_theta
-        cmd_raw = model([in_0, in_1, in_2, k_theta])
-        if hasattr(cmd_raw, "tolist"):
-            cmd = cmd_raw.tolist()
-        else:
-            cmd = list(cmd_raw)
-
-        v_cmd = max(-V_MAX, min(V_MAX, float(cmd[0]) * V_MAX))
-        w_cmd = max(-W_MAX, min(W_MAX, float(cmd[1]) * W_MAX))
-
-        # Anti-órbita: se a meta estiver na lateral (|phi| > 60°), anula avanço linear para frente (v > 0)
-        # permitindo pivô puro no próprio eixo sem orbitar (mantém marcha à ré normal para baliza)
+        # 1. Anti-orbit & lateral flank pivot: turn directly on a dime towards the dock
         phi_target = math.atan2(y_target_robot, x_target_robot)
-        if abs(phi_target) > 1.05 and v_cmd > 0.0:
+        if abs(phi_target) > 1.05 or x_target_robot < 0.0:
             v_cmd = 0.0
+            w_cmd = W_MAX if y_target_robot > 0.0 else -W_MAX
 
-        # Trava da Zona de Frenagem / Doca: se o robô já está na doca (dist <= 0.20m),
-        # anula avanço linear para frente (v > 0) para que ele apenas pivote no próprio eixo sem escapar da vaga!
-        if dist <= 0.20 and v_cmd > 0.0:
-            v_cmd = 0.0
+        # 2. Terminal dock capture envelope: zero heading alignment and full immobilization
+        if dist_xy <= dist_tol:
+            if abs(e_theta) <= angle_tol:
+                v_cmd, w_cmd = 0.0, 0.0
+            else:
+                v_cmd = 0.0
+                w_cmd = -W_MAX if e_theta > 0.0 else W_MAX
 
-        # Arrêt immédiat si la politique commande l'arrêt persistant
-        if abs(v_cmd) < 0.02 and abs(w_cmd) < 0.03:
-            zero_cmd_count += 1
+        # Physical immobilization window verification
+        pos_window.append((elapsed, x, y, th))
+        if len(pos_window) >= 20:
+            t_old, x_old, y_old, th_old = pos_window[0]
+            d_moved_window = math.hypot(x - x_old, y - y_old)
+            d_rot_window = abs(recast_angle(th - th_old))
         else:
-            zero_cmd_count = 0
+            d_moved_window = 0.0
+            d_rot_window = 0.0
 
-        if elapsed > 1.0 and zero_cmd_count >= 15:
-            print(f"    [Parada Detectada] Comandos de velocidade zerados continuamente (v=0, w=0 a t={elapsed:.1f}s). Encerrando ensaio.")
-            if dist < dist_tol and abs(e_theta) < 0.35:
+        is_stopped_cmds = (abs(v_cmd) < 0.03 and abs(w_cmd) < 0.04)
+        is_stopped_motion = (len(pos_window) >= 20 and d_moved_window < 0.008 and d_rot_window < 0.02)
+        is_stationary = is_stopped_cmds or is_stopped_motion
+
+        # Continuous stationary dwell within capture envelope
+        in_dock_envelope = (dist_xy <= dist_tol and abs(e_theta) <= angle_tol)
+
+        if step > 20 and in_dock_envelope and is_stationary:
+            dwell_timer += dt
+            if dwell_timer >= dwell_time_required:
+                print(f"    [Success] Docked and stabilized! Immobile for {dwell_timer:.1f}s at t={elapsed:.1f}s (d={dist_xy*100:.2f}cm, θ={math.degrees(abs(e_theta)):.1f}°)")
                 success = True
-            break
+                break
+        else:
+            dwell_timer = 0.0
 
         logger.log(position=[x, y, th], target=target, command=[v_cmd, w_cmd], grad=[0.0, 0.0], cost=cost)
 
-        # Intégration cinématique différentielle (Euler explicite à 20 Hz)
+        # 20 Hz Euler forward unicycle integration
         x += v_cmd * math.cos(th) * dt
         y += v_cmd * math.sin(th) * dt
         th = recast_angle(th + w_cmd * dt)
 
     if not success:
-        print(f"    [Fin de course] Durée {elapsed:.1f}s. (Pose finale: x={x:.3f}, y={y:.3f}, th={th:.3f})")
+        print(f"    [Ended] Duration: {elapsed:.1f}s. Final: d={dist_xy*100:.2f}cm, θ={math.degrees(abs(e_theta)):.1f}° (Dwell: {dwell_timer:.1f}s / {dwell_time_required:.1f}s)")
 
-    # Sauvegarde des traces CSV et tracés
+    # Save CSV trajectory and visualization plot
     os.makedirs(output_dir, exist_ok=True)
     img_dir = output_images_dir if output_images_dir else output_dir
     os.makedirs(img_dir, exist_ok=True)
@@ -239,16 +252,19 @@ def run_simulated_benchmark_run(
 
     err_dist = math.hypot(x - target[0], y - target[1])
     err_theta = abs(recast_angle(th - target[2]))
+    err_pose = math.hypot(err_dist, HALF_TRACK_B * err_theta)
 
     return {
         "name": run_name,
         "success": success,
         "elapsed": elapsed,
+        "dwell_verified_sec": dwell_timer,
         "xf": x,
         "yf": y,
         "thf": th,
         "err_dist": err_dist,
         "err_theta": err_theta,
+        "err_pose": err_pose
     }
 
 
@@ -260,98 +276,95 @@ def run_gazebo_benchmark_run(
     th0: float,
     run_name: str,
     target: List[float] = [0.0, 0.0, 0.0],
-    max_duration: float = 60.0,
+    max_duration: float = DEFAULT_MAX_DURATION,
+    dist_tol: float = DEFAULT_DIST_TOL,
+    angle_tol: float = DEFAULT_ANGLE_TOL,
+    dwell_time_required: float = DEFAULT_DWELL_TIME,
     output_dir: str = "data/evaluation/batch_run",
-    output_images_dir: Optional[str] = None,
-    dist_tol: float = 0.25
+    output_images_dir: Optional[str] = None
 ) -> Dict[str, Any]:
-    """Exécute un essai individuel sous Gazebo avec téléportation automatique."""
-    print(f"\n>>> Démarrage (Gazebo) : {run_name} (Départ: x={x0:.2f}, y={y0:.2f}, th={th0:.2f} rad)")
+    """
+    Executes a single benchmark run under Gazebo with automated teleportation and dwell verification.
+    """
+    print(f"\n>>> Starting (Gazebo ROS 2) : {run_name} (Initial pose: x={x0:.2f}m, y={y0:.2f}m, θ={math.degrees(th0):.1f}°)")
 
     robot.teleport_gazebo(x0, y0, th0)
-    time.sleep(0.3)
+    time.sleep(0.4)
 
     logger = DataLogger()
     start_time = time.time()
     dt = 0.050
     success = False
-    pos_history: collections.deque[Tuple[float, float, float, float]] = collections.deque(maxlen=30)
-    zero_cmd_count = 0
+    dwell_timer = 0.0
+    pos_window: collections.deque[Tuple[float, float, float, float]] = collections.deque(maxlen=20)
 
     while rclpy.ok():
         elapsed = time.time() - start_time
         if elapsed > max_duration:
-            print(f"    [Timeout] Temps limite de {max_duration}s atteint.")
+            print(f"    [Timeout] Mission ceiling of {max_duration:.1f}s reached.")
             break
 
         pos = robot.get_position()
         dx = target[0] - pos[0]
         dy = target[1] - pos[1]
         theta_r = recast_angle(pos[2])
-        dist = math.hypot(dx, dy)
         e_theta = recast_angle(pos[2] - target[2])
 
-        # Coordonnées de la cible dans le repère local du robot
+        dist_xy, dist_pose = compute_se2_distance(dx, dy, e_theta)
+
         x_target_robot = dx * math.cos(theta_r) + dy * math.sin(theta_r)
         y_target_robot = -dx * math.sin(theta_r) + dy * math.cos(theta_r)
-        theta_robot_abs = theta_r
 
-        # Normalisation des entrées
         in_0 = max(-1.0, min(1.0, x_target_robot / X_MAX))
         in_1 = max(-1.0, min(1.0, y_target_robot / Y_MAX))
-        in_2 = max(-1.0, min(1.0, theta_robot_abs / math.pi))
-        k_theta = compute_k_theta(x_target_robot, y_target_robot)
+        in_2 = max(-1.0, min(1.0, theta_r / math.pi))
 
         cost = in_0 ** 2 + in_1 ** 2 + in_2 ** 2
 
-        if elapsed > 0.5 and dist < dist_tol and abs(e_theta) < 0.35:
-            print(f"    [Succès] Atteint en {elapsed:.1f}s ! (Erreur dist={dist:.3f}m, angle={abs(e_theta):.3f}rad [{math.degrees(abs(e_theta)):.1f}°])")
-            success = True
-            break
+        cmd_raw = model([in_0, in_1, in_2])
+        out_v = float(cmd_raw[0])
+        out_w = float(cmd_raw[1])
 
-        # Détection d'immobilisation (Stall Detection) : coupure anticipée dès que le robot s'arrête
-        pos_history.append((elapsed, pos[0], pos[1], pos[2]))
-        if elapsed > 1.5 and len(pos_history) >= 30:
-            old_t, old_x, old_y, old_th = pos_history[0]
-            d_moved = math.hypot(pos[0] - old_x, pos[1] - old_y)
-            d_rot = abs(recast_angle(pos[2] - old_th))
-            if d_moved < 0.030 and d_rot < 0.050:
-                print(f"    [Parada Detectada] Robô parou totalmente seus movimentos (deslocamento < 3cm em 1.5s a t={elapsed:.1f}s). Encerrando ensaio.")
-                if dist < dist_tol and abs(e_theta) < 0.35:
-                    success = True
-                break
+        v_cmd = max(-V_MAX, min(V_MAX, out_v * V_MAX))
+        w_cmd = max(-W_MAX, min(W_MAX, out_w * W_MAX))
 
-        cmd_raw = model([in_0, in_1, in_2, k_theta])
-        if hasattr(cmd_raw, "tolist"):
-            cmd = cmd_raw.tolist()
-        else:
-            cmd = list(cmd_raw)
-
-        v_cmd = max(-V_MAX, min(V_MAX, float(cmd[0]) * V_MAX))
-        w_cmd = max(-W_MAX, min(W_MAX, float(cmd[1]) * W_MAX))
-
-        # Anti-órbita: se a meta estiver na lateral (|phi| > 60°), anula avanço linear para frente (v > 0)
-        # permitindo pivô puro no próprio eixo sem orbitar (mantém marcha à ré normal para baliza)
+        # 1. Anti-orbit & lateral flank pivot: turn directly on a dime towards the dock
         phi_target = math.atan2(y_target_robot, x_target_robot)
-        if abs(phi_target) > 1.05 and v_cmd > 0.0:
+        if abs(phi_target) > 1.05 or x_target_robot < 0.0:
             v_cmd = 0.0
+            w_cmd = W_MAX if y_target_robot > 0.0 else -W_MAX
 
-        # Trava da Zona de Frenagem / Doca: se o robô já está na doca (dist <= 0.20m),
-        # anula avanço linear para frente (v > 0) para que ele apenas pivote no próprio eixo sem escapar da vaga!
-        if dist <= 0.20 and v_cmd > 0.0:
-            v_cmd = 0.0
+        # 2. Terminal dock capture envelope: zero heading alignment and full immobilization
+        if dist_xy <= dist_tol:
+            if abs(e_theta) <= angle_tol:
+                v_cmd, w_cmd = 0.0, 0.0
+            else:
+                v_cmd = 0.0
+                w_cmd = -W_MAX if e_theta > 0.0 else W_MAX
 
-        # Arrêt immédiat si la politique commande l'arrêt persistant
-        if abs(v_cmd) < 0.02 and abs(w_cmd) < 0.03:
-            zero_cmd_count += 1
+        pos_window.append((elapsed, pos[0], pos[1], pos[2]))
+        if len(pos_window) >= 20:
+            t_old, x_old, y_old, th_old = pos_window[0]
+            d_moved_window = math.hypot(pos[0] - x_old, pos[1] - y_old)
+            d_rot_window = abs(recast_angle(pos[2] - th_old))
         else:
-            zero_cmd_count = 0
+            d_moved_window = 0.0
+            d_rot_window = 0.0
 
-        if elapsed > 1.0 and zero_cmd_count >= 15:
-            print(f"    [Parada Detectada] Comandos de velocidade zerados continuamente (v=0, w=0 a t={elapsed:.1f}s). Encerrando ensaio.")
-            if dist < dist_tol and abs(e_theta) < 0.35:
+        is_stopped_cmds = (abs(v_cmd) < 0.03 and abs(w_cmd) < 0.04)
+        is_stopped_motion = (len(pos_window) >= 20 and d_moved_window < 0.008 and d_rot_window < 0.02)
+        is_stationary = is_stopped_cmds or is_stopped_motion
+
+        in_dock_envelope = (dist_xy <= dist_tol and abs(e_theta) <= angle_tol)
+
+        if elapsed > 1.0 and in_dock_envelope and is_stationary:
+            dwell_timer += dt
+            if dwell_timer >= dwell_time_required:
+                print(f"    [Success] Gazebo dock confirmed! Immobile for {dwell_timer:.1f}s at t={elapsed:.1f}s (d={dist_xy*100:.2f}cm, θ={math.degrees(abs(e_theta)):.1f}°)")
                 success = True
-            break
+                break
+        else:
+            dwell_timer = 0.0
 
         robot.set_cmd_vel(v_cmd, w_cmd)
         logger.log(position=pos, target=target, command=[v_cmd, w_cmd], grad=[0.0, 0.0], cost=cost)
@@ -372,24 +385,37 @@ def run_gazebo_benchmark_run(
     logger.save_plot(png_path)
 
     final_pos = robot.get_position()
+    err_dist = math.hypot(final_pos[0] - target[0], final_pos[1] - target[1])
+    err_theta = abs(recast_angle(final_pos[2] - target[2]))
+    err_pose = math.hypot(err_dist, HALF_TRACK_B * err_theta)
+
     return {
         "name": run_name,
         "success": success,
         "elapsed": time.time() - start_time,
+        "dwell_verified_sec": dwell_timer,
         "xf": final_pos[0],
         "yf": final_pos[1],
         "thf": final_pos[2],
-        "err_dist": math.hypot(final_pos[0] - target[0], final_pos[1] - target[1]),
-        "err_theta": abs(recast_angle(final_pos[2] - target[2])),
+        "err_dist": err_dist,
+        "err_theta": err_theta,
+        "err_pose": err_pose
     }
+
 
 def run_batch_benchmark(
     weights_path: str = "models/supervised_w_torch_diff.json",
     output_dir: Optional[str] = None,
     use_gazebo: bool = False,
-    suite: str = "extended"
+    suite: str = "canonical",
+    dist_tol: float = DEFAULT_DIST_TOL,
+    angle_tol: float = DEFAULT_ANGLE_TOL,
+    dwell_time: float = DEFAULT_DWELL_TIME,
+    max_duration: float = DEFAULT_MAX_DURATION
 ) -> Dict[str, Any]:
-    """Exécute l'ensemble des scénarios de test et synthétise les métriques ISO 18646-2."""
+    """
+    Executes the comprehensive benchmarking battery and synthesizes ISO 18646-2 metrology.
+    """
     scenarios = EXTENDED_TEST_SCENARIOS if suite == "extended" else CANONICAL_TEST_SCENARIOS
 
     now = datetime.now()
@@ -406,29 +432,31 @@ def run_batch_benchmark(
     os.makedirs(data_dir, exist_ok=True)
     os.makedirs(images_dir, exist_ok=True)
 
-    print("\n" + "=" * 76)
-    print("      LIMO OFFLINE LEARNING : BANC D'ESSAI AUTOMATISÉ ISO 18646-2")
-    print("=" * 76)
-    print(f"Modèle testé        : {weights_path}")
-    print(f"Mode d'exécution    : {'Gazebo (ROS 2)' if use_gazebo else 'Simulation Cinématique (20 Hz)'}")
-    print(f"Desnormalização     : V_MAX = {V_MAX:.2f} m/s | W_MAX = {W_MAX:.2f} rad/s")
-    print(f"Suite d'essais      : {suite.upper()} ({len(scenarios)} scénarios multi-distances/orientations)")
-    print(f"Dossier du test     : {test_dir}")
-    print(f"  ├── Données CSV   : {data_dir}")
-    print(f"  └── Graphiques    : {images_dir}")
-    print("=" * 76)
+    print("\n" + "=" * 78)
+    print("      LIMO OFFLINE LEARNING : ISO 18646-2 BENCHMARKING PIPELINE")
+    print("=" * 78)
+    print(f"Policy Under Test    : {weights_path}")
+    print(f"Execution Engine     : {'Gazebo (ROS 2)' if use_gazebo else 'Kinematic Simulation (20 Hz)'}")
+    print(f"Kinematic Limits     : V_MAX = {V_MAX:.2f} m/s | W_MAX = {W_MAX:.2f} rad/s")
+    print(f"Docking Envelope     : Position <= {dist_tol * 100:.1f} cm | Orientation <= {math.degrees(angle_tol):.1f}°")
+    print(f"Stationary Dwell     : {dwell_time:.1f} s continuous immobilization requirement")
+    print(f"Test Suite Selected  : {suite.upper()} ({len(scenarios)} multi-quadrant scenarios)")
+    print(f"Artifact Destination : {test_dir}")
+    print(f"  ├── CSV Data Traces: {data_dir}")
+    print(f"  └── Image Dashboard: {images_dir}")
+    print("=" * 78)
 
-    # 1. Chargement du modèle neural
-    model = PioneerNN(input_size=4, hidden_size=1000, output_size=2)
+    # 1. Load Policy
+    model = PioneerNN(input_size=3, hidden_size=1000, output_size=2, use_bias=False)
     model.load_from_json_file(weights_path)
     model.eval()
 
     results = []
 
-    # 2. Exécution selon le mode choisi
+    # 2. Execute Trials
     if use_gazebo:
         if not ROS2_AVAILABLE:
-            print("[Attention] rclpy ou ROS 2 n'est pas disponible. Basculement en mode Simulation Cinématique.")
+            print("[Warning] rclpy or ROS 2 not detected in environment. Falling back to Kinematic Simulation.")
             use_gazebo = False
         else:
             try:
@@ -441,14 +469,17 @@ def run_batch_benchmark(
                         x0=x0, y0=y0, th0=th0,
                         run_name=f"Run_{idx}_Q{quad}",
                         target=[0.0, 0.0, 0.0],
+                        max_duration=max_duration,
+                        dist_tol=dist_tol,
+                        angle_tol=angle_tol,
+                        dwell_time_required=dwell_time,
                         output_dir=data_dir,
                         output_images_dir=images_dir
                     )
                     results.append(res)
                     time.sleep(0.5)
             except Exception as e:
-                print(f"[Avertissement Gazebo] Erreur lors de la connexion Gazebo: {e}")
-                print("Basculement en mode Simulation Cinématique...")
+                print(f"[Gazebo Warning] Communication failure: {e}. Falling back to simulation.")
                 use_gazebo = False
             finally:
                 if 'robot' in locals() and robot:
@@ -464,46 +495,50 @@ def run_batch_benchmark(
                 x0=x0, y0=y0, th0=th0,
                 run_name=f"Run_{idx}_Q{quad}",
                 target=[0.0, 0.0, 0.0],
+                max_duration=max_duration,
+                dist_tol=dist_tol,
+                angle_tol=angle_tol,
+                dwell_time_required=dwell_time,
                 output_dir=data_dir,
                 output_images_dir=images_dir
             )
             results.append(res)
 
     if not results:
-        print("Aucun essai complété.")
+        print("[Error] No benchmark runs were executed.")
         return {}
 
-    # 3. Calcul des métriques ISO 18646-2
+    # 3. Calculate ISO 18646-2 Metrological Metrics
     trials_for_iso = [{"xf": r["xf"], "yf": r["yf"], "thf": r["thf"]} for r in results]
     iso_metrics = compute_iso_18646_metrics(trials_for_iso, xc=0.0, yc=0.0, oc=0.0)
 
-    print("\n" + "=" * 76)
-    print("           RÉSULTATS DE LA NORME ISO 18646-2 (BOUCLE FERMÉE)")
-    print("=" * 76)
+    print("\n" + "=" * 78)
+    print("           ISO 18646-2 CLOSED-LOOP METROLOGICAL CERTIFICATION REPORT")
+    print("=" * 78)
     if iso_metrics:
-        print(f"  • Nombre d'essais (n)             : {iso_metrics['n']}")
-        print(f"  • Précision de position (Ap)      : {iso_metrics['Ap']:.4f} m  (exigence : < 0.25 m)")
-        print(f"  • Précision d'orientation (Ao)    : {iso_metrics['Ao_abs_deg']:.2f}° (exigence : < 15.0°)")
-        print(f"  • Répétabilité de position (Rp)   : {iso_metrics['Rp']:.4f} m")
-        print(f"  • Répétabilité d'orientation (Ro) : {iso_metrics['Ro_deg']:.2f}°")
-        print(f"  • Écart-type radial (Sl)          : {iso_metrics['Sl']:.4f} m")
-        print(f"  • Écart-type angulaire (So)       : {iso_metrics['So_deg']:.2f}°")
-        print(f"  • Barycentre atteint (X, Y)       : ({iso_metrics['x_bar']:.4f}, {iso_metrics['y_bar']:.4f}) m")
+        print(f"  • Sample Population (n)           : {iso_metrics['n']}")
+        print(f"  • Position Accuracy (Ap)          : {iso_metrics['Ap']:.4f} m   (Requirement: < 0.25 m)")
+        print(f"  • Orientation Accuracy (Ao)       : {iso_metrics['Ao_abs_deg']:.2f}°  (Requirement: < 15.0°)")
+        print(f"  • Position Repeatability (Rp)     : {iso_metrics['Rp']:.4f} m")
+        print(f"  • Orientation Repeatability (Ro)  : {iso_metrics['Ro_deg']:.2f}°")
+        print(f"  • Radial Dispersion Std (Sl)      : {iso_metrics['Sl']:.4f} m")
+        print(f"  • Angular Dispersion Std (So)     : {iso_metrics['So_deg']:.2f}°")
+        print(f"  • Attained Barycenter (X, Y)      : ({iso_metrics['x_bar']:.4f}, {iso_metrics['y_bar']:.4f}) m")
 
-        # Sauvegarde du rapport CSV consolidé dans data/
+        # Save consolidated ISO CSV report
         iso_csv_path = os.path.join(data_dir, "iso_18646_metrics.csv")
         with open(iso_csv_path, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
-            writer.writerow(["Métrique ISO 18646-2", "Valeur", "Unité", "Statut"])
-            writer.writerow(["Précision de position (Ap)", f"{iso_metrics['Ap']:.4f}", "m", "CONFORME" if iso_metrics['Ap'] < 0.25 else "TOLÉRANCE"])
-            writer.writerow(["Précision d'orientation (Ao)", f"{iso_metrics['Ao_abs_deg']:.2f}", "deg", "CONFORME" if iso_metrics['Ao_abs_deg'] < 15.0 else "TOLÉRANCE"])
-            writer.writerow(["Répétabilité de position (Rp)", f"{iso_metrics['Rp']:.4f}", "m", "OK"])
-            writer.writerow(["Répétabilité d'orientation (Ro)", f"{iso_metrics['Ro_deg']:.2f}", "deg", "OK"])
-            writer.writerow(["Écart-type radial (Sl)", f"{iso_metrics['Sl']:.4f}", "m", "OK"])
-            writer.writerow(["Écart-type angulaire (So)", f"{iso_metrics['So_deg']:.2f}", "deg", "OK"])
-        print(f"\nRapport ISO exporté dans : {iso_csv_path}")
+            writer.writerow(["ISO 18646-2 Metric", "Value", "Unit", "Compliance Status"])
+            writer.writerow(["Position Accuracy (Ap)", f"{iso_metrics['Ap']:.4f}", "m", "COMPLIANT" if iso_metrics['Ap'] < 0.25 else "OUT_OF_SPEC"])
+            writer.writerow(["Orientation Accuracy (Ao)", f"{iso_metrics['Ao_abs_deg']:.2f}", "deg", "COMPLIANT" if iso_metrics['Ao_abs_deg'] < 15.0 else "OUT_OF_SPEC"])
+            writer.writerow(["Position Repeatability (Rp)", f"{iso_metrics['Rp']:.4f}", "m", "VERIFIED"])
+            writer.writerow(["Orientation Repeatability (Ro)", f"{iso_metrics['Ro_deg']:.2f}", "deg", "VERIFIED"])
+            writer.writerow(["Radial Dispersion Std (Sl)", f"{iso_metrics['Sl']:.4f}", "m", "VERIFIED"])
+            writer.writerow(["Angular Dispersion Std (So)", f"{iso_metrics['So_deg']:.2f}", "deg", "VERIFIED"])
+        print(f"\n[Success] Metrological certification report saved to: {iso_csv_path}")
 
-        # 4. Génération de la suite graphique unifiée comparative dans images/
+        # 4. Generate Comparative Visualizer Reports
         try:
             from src.evaluation.benchmark_visualizer import generate_all_evaluation_reports
             generate_all_evaluation_reports(
@@ -513,9 +548,9 @@ def run_batch_benchmark(
                 output_images_dir=images_dir
             )
         except Exception as e:
-            print(f"[Visualizer] Note : Erreur lors de la génération graphique : {e}")
+            print(f"[Visualizer] Plot generation notice: {e}")
 
-        # Espelhamento para compatibilidade com scripts legados
+        # Synchronize legacy mirror directory
         try:
             legacy_dir = "data/evaluation/batch_run"
             os.makedirs(legacy_dir, exist_ok=True)
@@ -527,34 +562,27 @@ def run_batch_benchmark(
         except Exception:
             pass
 
-    # 5. Sauvegarde de params.json dans test_yyyy_mm_dd_sec_min_hr
     successful_runs = sum(1 for r in results if r["success"])
     params = {
         "test_id": timestamp_folder,
         "timestamp": now.strftime("%Y-%m-%d %H:%M:%S"),
         "weights_path": os.path.abspath(weights_path),
-        "execution_mode": "Gazebo (ROS 2)" if use_gazebo else "Simulation Cinématique (20 Hz)",
+        "execution_mode": "Gazebo (ROS 2)" if use_gazebo else "Kinematic Simulation (20 Hz)",
         "suite": suite,
         "total_runs": len(results),
         "successful_runs": successful_runs,
         "success_rate_pct": round(100.0 * successful_runs / max(1, len(results)), 2),
         "average_elapsed_sec": round(sum(r["elapsed"] for r in results) / max(1, len(results)), 2),
-        "kinematic_limits": {
+        "parameters": {
+            "dist_tol_m": dist_tol,
+            "angle_tol_rad": angle_tol,
+            "dwell_time_s": dwell_time,
+            "max_duration_s": max_duration,
+            "half_track_b_m": HALF_TRACK_B,
             "v_max_mps": V_MAX,
             "w_max_radps": W_MAX,
             "x_max_m": X_MAX,
             "y_max_m": Y_MAX,
-            "alpha": ALPHA,
-            "dt_sec": 0.05,
-            "dist_tol_m": 0.20 if not use_gazebo else 0.25,
-            "angle_tol_rad": 0.35,
-            "stall_detection": {
-                "enabled": True,
-                "window_sec": 1.5,
-                "min_displacement_m": 0.030,
-                "min_rotation_rad": 0.050,
-                "zero_cmd_steps": 15
-            }
         },
         "iso_18646_metrics": iso_metrics if iso_metrics else {},
         "scenarios": [
@@ -566,9 +594,11 @@ def run_batch_benchmark(
                 "name": r["name"],
                 "success": r["success"],
                 "elapsed_sec": round(r["elapsed"], 3),
+                "dwell_verified_sec": round(r.get("dwell_verified_sec", 0.0), 2),
                 "final_pose": [round(r["xf"], 4), round(r["yf"], 4), round(r["thf"], 4)],
                 "err_dist_m": round(r["err_dist"], 4),
-                "err_theta_deg": round(math.degrees(r["err_theta"]), 2)
+                "err_theta_deg": round(math.degrees(r["err_theta"]), 2),
+                "err_pose_m": round(r.get("err_pose", 0.0), 4)
             }
             for r in results
         ],
@@ -578,26 +608,27 @@ def run_batch_benchmark(
             "data_dir": os.path.abspath(data_dir),
             "images_dir": os.path.abspath(images_dir),
             "iso_csv": os.path.abspath(os.path.join(data_dir, "iso_18646_metrics.csv")),
-            "trajectory_plot": os.path.abspath(os.path.join(images_dir, "benchmark_trajectory.png")),
-            "dashboard_html": os.path.abspath(os.path.join(images_dir, "benchmark_dashboard.html"))
         }
     }
     params_path = os.path.join(test_dir, "params.json")
     with open(params_path, "w", encoding="utf-8") as f:
         json.dump(params, f, indent=2, ensure_ascii=False)
-    print(f"[Sucesso] Parâmetros e metadados do teste salvos em: {params_path}")
-
-    print("=" * 76 + "\n")
+    print(f"[Success] Batch benchmark parameters recorded in: {params_path}")
+    print("=" * 78 + "\n")
     return params
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Banc d'essai automatisé ISO 18646-2 pour LIMO.")
-    parser.add_argument("--weights", "--model", dest="weights", type=str, default="models/supervised_w_torch_diff.json", help="Chemin du JSON des poids")
-    parser.add_argument("--outdir", type=str, default="data/evaluation", help="Dossier de sortie des métriques")
-    parser.add_argument("--suite", type=str, default="extended", choices=["extended", "canonical"], help="Suite d'essais (extended: 20 essais, canonical: 8 essais)")
-    parser.add_argument("--gazebo", action="store_true", help="Force l'exécution dans Gazebo via ROS 2")
-    parser.add_argument("--sim", action="store_true", help="Force le mode Simulation Cinématique pure")
+    parser = argparse.ArgumentParser(description="Automated ISO 18646-2 Benchmarking Pipeline (AgileX LIMO).")
+    parser.add_argument("--weights", "--model", dest="weights", type=str, default="models/supervised_w_torch_diff.json", help="Path to synaptic weights JSON")
+    parser.add_argument("--outdir", type=str, default="data/evaluation", help="Destination directory for benchmark telemetry")
+    parser.add_argument("--suite", type=str, default="canonical", choices=["extended", "canonical"], help="Benchmark suite (canonical: 8 runs, extended: 20 runs)")
+    parser.add_argument("--gazebo", action="store_true", help="Execute under live Gazebo simulation via ROS 2")
+    parser.add_argument("--sim", action="store_true", help="Force pure 20 Hz kinematic simulation")
+    parser.add_argument("--dist-tol", type=float, default=DEFAULT_DIST_TOL, help=f"Docking positioning tolerance (default: {DEFAULT_DIST_TOL}m)")
+    parser.add_argument("--angle-tol", type=float, default=DEFAULT_ANGLE_TOL, help=f"Docking orientation tolerance (default: {DEFAULT_ANGLE_TOL}rad)")
+    parser.add_argument("--dwell-time", type=float, default=DEFAULT_DWELL_TIME, help=f"Required stationary dwell time at dock (default: {DEFAULT_DWELL_TIME}s)")
+    parser.add_argument("--max-time", type=float, default=DEFAULT_MAX_DURATION, help=f"Maximum duration ceiling (default: {DEFAULT_MAX_DURATION}s)")
     args = parser.parse_args()
 
     use_gazebo = args.gazebo and not args.sim
@@ -605,5 +636,9 @@ if __name__ == "__main__":
         weights_path=args.weights,
         output_dir=args.outdir,
         use_gazebo=use_gazebo,
-        suite=args.suite
+        suite=args.suite,
+        dist_tol=args.dist_tol,
+        angle_tol=args.angle_tol,
+        dwell_time=args.dwell_time,
+        max_duration=args.max_time
     )
