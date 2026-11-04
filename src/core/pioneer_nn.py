@@ -62,14 +62,19 @@ TORCH_AVAILABLE = True
 
 def recast_angle(angle_rad: float) -> float:
     """
-    Recasts an arbitrary angle into the canonical principal interval (-pi, +pi].
+    Recasts an arbitrary angle into the canonical principal interval [-pi, +pi].
+    Preserves exact boundary extremes (-pi and +pi) against floating-point rounding artifacts.
 
     Args:
         angle_rad (float): Input angle in radians.
 
     Returns:
-        float: Equivalent angle wrapped strictly in (-pi, +pi].
+        float: Equivalent angle wrapped in [-pi, +pi].
     """
+    if abs(angle_rad - math.pi) < 1e-4:
+        return math.pi
+    if abs(angle_rad + math.pi) < 1e-4:
+        return -math.pi
     return math.atan2(math.sin(angle_rad), math.cos(angle_rad))
 
 

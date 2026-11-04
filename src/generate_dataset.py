@@ -96,7 +96,14 @@ ENIB_MANEUVER_NAMES = {
 
 
 def recast_angle(angle_rad: float) -> float:
-    """Wraps an angle into the canonical principal interval (-pi, +pi]."""
+    """
+    Wraps an angle into the canonical principal interval [-pi, +pi].
+    Preserves exact boundary extremes (-pi and +pi) against floating-point rounding artifacts.
+    """
+    if abs(angle_rad - math.pi) < 1e-4:
+        return math.pi
+    if abs(angle_rad + math.pi) < 1e-4:
+        return -math.pi
     return math.atan2(math.sin(angle_rad), math.cos(angle_rad))
 
 
@@ -166,6 +173,9 @@ def expert_rule_based_controller(
         if abs(e_theta) <= d_stop_angle_tol:
             # Full vehicle immobilization aligned in dock
             v, w = 0.0, 0.0
+        elif abs(abs(e_theta) - math.pi) < 1e-4:
+            # Vehicle facing exactly backwards in dock terminal: rotate consistently CCW
+            v, w = 0.0, w_max
         elif e_theta > 0.0:
             # In-place clockwise pivot alignment
             v, w = 0.0, -w_max
@@ -180,7 +190,8 @@ def expert_rule_based_controller(
         v = -v_max
         phi_rear = math.atan2(y_tr, -x_tr)
         # Reverse steering error combines rear line-of-sight with terminal heading alignment
-        steer_err_rear = phi_rear - 0.40 * e_theta
+        effective_e_theta = 0.0 if abs(abs(e_theta) - math.pi) < 1e-4 else e_theta
+        steer_err_rear = phi_rear - 0.40 * effective_e_theta
         if steer_err_rear > REVERSE_DEADBAND:
             w = -w_max  # Directs vehicle rear towards the left
         elif steer_err_rear < -REVERSE_DEADBAND:
@@ -194,7 +205,7 @@ def expert_rule_based_controller(
     # Pivot on a dime (v = 0.0) to eliminate wide orbiting circles around the origin!
     if x_tr < 0.0 or abs(phi) > MAX_PIVOT_PHI:
         v = 0.0
-        w = w_max if y_tr > 0.0 else -w_max
+        w = w_max if y_tr >= 0.0 else -w_max
         m_id, _ = classify_enib_maneuver(v, w)
         return v, w, m_id
 
@@ -202,7 +213,8 @@ def expert_rule_based_controller(
     v = v_max
     if dist < 0.60:
         # Near dock ingress: blend direct line-of-sight with terminal heading alignment
-        steer_err = phi + 0.35 * e_theta
+        effective_e_theta = 0.0 if abs(abs(e_theta) - math.pi) < 1e-4 else e_theta
+        steer_err = phi + 0.35 * effective_e_theta
     else:
         # Far field: follow the ENIB strategic vector field
         th_s = compute_theta_strategic(x_tr, y_tr)
@@ -240,7 +252,7 @@ def generate_balanced_dataset(
     xs = [round(-x_max + i * step_xy, 2) for i in range(n_steps_x + 1)]
     n_steps_y = int(round(2.0 * y_max / step_xy))
     ys = [round(-y_max + i * step_xy, 2) for i in range(n_steps_y + 1)]
-    thetas = [round(-math.pi + i * (2.0 * math.pi / num_angles), 4) for i in range(num_angles)]
+    thetas = [round(-math.pi + i * (2.0 * math.pi / num_angles), 4) for i in range(num_angles + 1)]
 
     for x in xs:
         for y in ys:
@@ -255,7 +267,7 @@ def generate_balanced_dataset(
     n_dock = int(round(0.12 / dock_step))
     dock_xs = [round(-0.06 + i * dock_step, 4) for i in range(n_dock + 1)]
     dock_ys = [round(-0.06 + i * dock_step, 4) for i in range(n_dock + 1)]
-    dock_thetas = [round(-math.pi + i * (2.0 * math.pi / 64), 4) for i in range(64)]
+    dock_thetas = [round(-math.pi + i * (2.0 * math.pi / 64), 4) for i in range(65)]
 
     for x in dock_xs:
         for y in dock_ys:
@@ -268,7 +280,7 @@ def generate_balanced_dataset(
     # --------------------------------------------------------------------------
     rev_xs = [round(-2.5 + i * 0.02, 3) for i in range(121)]
     rev_ys = [round(-0.40 + i * 0.02, 3) for i in range(41)]
-    rev_thetas = [round(-math.pi + i * (2.0 * math.pi / 32), 4) for i in range(32)]
+    rev_thetas = [round(-math.pi + i * (2.0 * math.pi / 32), 4) for i in range(33)]
     for x in rev_xs:
         for y in rev_ys:
             for th in rev_thetas:
@@ -280,7 +292,7 @@ def generate_balanced_dataset(
     # --------------------------------------------------------------------------
     fwd_xs = [round(0.10 + i * 0.05, 3) for i in range(49)]
     fwd_ys = [round(-0.60 + i * 0.05, 3) for i in range(25)]
-    fwd_thetas = [round(-math.pi + i * (2.0 * math.pi / 32), 4) for i in range(32)]
+    fwd_thetas = [round(-math.pi + i * (2.0 * math.pi / 32), 4) for i in range(33)]
     for x in fwd_xs:
         for y in fwd_ys:
             for th in fwd_thetas:
@@ -288,7 +300,7 @@ def generate_balanced_dataset(
                 raw_samples_by_class[m_id].append([x, y, th, v, w])
 
     # --------------------------------------------------------------------------
-    # 4. Bilateral Sagittal Mirroring (Zero Left/Right Directional Bias)
+    # 5. Bilateral Sagittal Mirroring (Zero Left/Right Directional Bias)
     # --------------------------------------------------------------------------
     for m_id in range(1, 10):
         mirrored_list = []
@@ -303,7 +315,20 @@ def generate_balanced_dataset(
         raw_samples_by_class[m_id].extend(mirrored_list)
 
     # --------------------------------------------------------------------------
-    # 5. Deduplication and Exact Stratified Balancing (5,000 unique per class)
+    # 6. Periodic Boundary Sewing (Topology: S^1 equivalence of -pi and +pi)
+    # --------------------------------------------------------------------------
+    for m_id in range(1, 10):
+        sewn_list = []
+        for s in raw_samples_by_class[m_id]:
+            th = s[2]
+            if abs(th - (-math.pi)) < 1e-3:
+                sewn_list.append([s[0], s[1], round(math.pi, 4), s[3], s[4]])
+            elif abs(th - math.pi) < 1e-3:
+                sewn_list.append([s[0], s[1], round(-math.pi, 4), s[3], s[4]])
+        raw_samples_by_class[m_id].extend(sewn_list)
+
+    # --------------------------------------------------------------------------
+    # 7. Deduplication and Exact Stratified Balancing (5,000 unique per class)
     # --------------------------------------------------------------------------
     balanced_samples: List[List[float]] = []
     final_counts: Dict[int, int] = {}
