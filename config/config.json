@@ -19,7 +19,7 @@
         "input_size": 3,
         "hidden_size": 1000,
         "output_size": 2,
-        "use_bias": false,
+        "use_bias": true,
         "weights_path": "models/supervised_w_torch_diff.json",
         "history_path": "models/training_history.json"
     },
