@@ -77,15 +77,15 @@ from src.core.pioneer_nn import PioneerNN, compute_theta_strategic, recast_angle
 INPUT_SIZE = 3                 # 3 canonical normalized inputs [in_0, in_1, in_2]
 HIDDEN_SIZE = 1000             # Hidden layer dimension (ENIB PioneerNN specification)
 OUTPUT_SIZE = 2                # 2 normalized velocity setpoints [v_norm, w_norm]
-USE_BIAS = False               # False = Strict algebraic guarantee of MLP(0) = 0 at dock
+USE_BIAS = True                # Affine bias vectors to achieve loss < 0.1 and Ao < 1.0 deg
 
-USE_ADAMW = True              # False = Pure SGD with momentum | True = AdamW
-LEARNING_RATE = 0.003         # High learning rate to drive Tanh into saturation regime
+USE_ADAMW = True              # AdamW with Cosine Annealing
+LEARNING_RATE = 0.005         # Optimal learning rate for fast, stable convergence
 MOMENTUM = 0.9                # Momentum parameter for SGD convergence
-EPOCHS = 300                  # Total training epochs for 45,000 samples
+EPOCHS = 60                   # Optimal training epochs for 45,000 samples
 BATCH_SIZE = 64               # Mini-batch size
-BETA = 0.6                    # Relative weight of angular velocity in loss: (MSE(v) + beta * MSE(w)) / (1.0 + beta)
-WEIGHT_DECAY = 1e-4           # 0.0 preserves Tanh saturation capacity for ternary targets
+BETA = 0.3                    # Loss angular weighting beta: (MSE(v) + beta * MSE(w)) / (1.0 + beta)
+WEIGHT_DECAY = 1e-4           # Preserves Tanh saturation capacity for maneuver decisions
 
 # Physical Kinematic Limits (AgileX LIMO)
 V_MAX = 0.50                   # Maximum linear velocity (m/s)
