@@ -110,27 +110,44 @@ No robô real, você **não precisa digitar nenhuma coordenada manual**. O robô
 ### 3.1 Terminal 1 no Robô — Inicializar o Driver dos Motores
 Coloque o robô parado exatamente no local onde você quer que seja a doca/meta $(0, 0, 0)$ e execute:
 ```bash
-source /opt/ros/humble/setup.bash
-ros2 launch limo_bringup limo_start.launch.py
+# Para LIMO COBOT (Foxy):
+source /opt/ros/foxy/setup.bash
+source ~/limo_ros2_ws/install/setup.bash
+ros2 launch limo_base limo_base.launch.py
+
+# (Ou se for LIMO Standard Humble: source /opt/ros/humble/setup.bash && source ~/agilex_ws/install/setup.bash && ros2 launch limo_base limo_base.launch.py)
 ```
-*(O robô zera a odometria como $(0, 0, 0)$ e trava os motores).*
+*(O nó deve continuar rodando em segundo plano. Ele zera a odometria como $(0, 0, 0)$ e publica `/odom`).*
 
-### 3.2 Dirigir o Robô até o Ponto de Início
-Com o controle remoto ou teleop, dirija o robô até onde quiser iniciar o teste (por exemplo, a $1.5\text{ m}$ ou $2.0\text{ m}$ de distância, torto ou virado para o lado).
-
-### 3.3 Terminal 2 no Robô — Lançar a Navegação Autônoma
+### 3.2 Terminal 2 no Robô — Dirigir com Teclado (Teleop)
+Abra um segundo terminal no robô para afastar o robô da doca até o ponto inicial do teste:
 ```bash
-source /opt/ros/humble/setup.bash
+source /opt/ros/foxy/setup.bash
+ros2 run teleop_twist_keyboard teleop_twist_keyboard
+```
+**Controles no teclado:**
+- `i` : Anda para frente
+- `,` : Anda para trás
+- `j` : Gira para a esquerda no próprio eixo
+- `l` : Gira para a direita no próprio eixo
+- `k` : Parar imediatamente (Stop)
+
+Dirija o robô até onde quiser (ex: $1.5\text{ m}$ ou $2.0\text{ m}$ de distância, reto ou virado em ângulo), aperte `k` para parar e finalize com `Ctrl + C`.
+
+### 3.3 Terminal 3 no Robô — Lançar a Navegação Autônoma (PioneerNN)
+```bash
+# Para LIMO COBOT (Foxy):
+source /opt/ros/foxy/setup.bash
 cd ~/limo-offline-learning
 
 python3 src/evaluation/run_autonomous.py --real
 ```
-1. O script lerá a pose atual do `/odom` e mostrará na tela:
+1. O script lerá a pose atual do `/odom` automaticamente e mostrará na tela:
    ```text
    [Odometry] Current robot pose: x=1.84 m, y=0.92 m, theta=34.2°
    [Ready] Press Enter to start autonomous docking...
    ```
-2. Aperte **Enter**! O PioneerNN assumirá o controle, fará a aproximação em contorno suave e estacionará no $(0, 0, 0)$ com imobilização de 30 segundos.
+2. Aperte **Enter**! O PioneerNN assumirá o controle em `/cmd_vel`, fará a aproximação suave e estacionará no $(0, 0, 0)$ com imobilização de 30 segundos.
 
 ---
 
