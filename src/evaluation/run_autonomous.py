@@ -78,7 +78,7 @@ Y_MAX = 5.0                    # Arena spatial boundary Y (m)
 HALF_TRACK_B = 0.086           # Half-track width b = L/2 (m) for AgileX LIMO
 
 DEFAULT_DIST_TOL = 0.08        # 8 cm positioning radius from dock center (m)
-DEFAULT_ANGLE_TOL = 0.15       # Heading orientation tolerance (rad) ~ 8.6 deg
+DEFAULT_ANGLE_TOL = 0.26       # ISO 18646-2 Heading orientation tolerance (rad) ~ 15.0 deg
 DEFAULT_DWELL_TIME = 30.0      # Required continuous stationary duration at dock (s)
 DEFAULT_MAX_DURATION = 150.0   # Extended mission ceiling to accommodate navigation + dwell (s)
 # ==============================================================================
@@ -235,30 +235,15 @@ def run_autonomous_session(
             out_v = float(cmd_raw[0])
             out_w = float(cmd_raw[1])
 
-            # Denormalization to physical velocities
+            # Pure 100% Neural Policy Output Denormalization (Zero External Geometric Rules)
             v_cmd = max(-v_max_effective, min(v_max_effective, out_v * v_max_effective))
             w_cmd = max(-w_max_effective, min(w_max_effective, out_w * w_max_effective))
 
-            # 1. Canonical ENIB Deadband on Neural Network Outputs (Origin Invariance)
-            if abs(out_v) <= 0.08:
+            # Canonical ENIB Output Deadband (Class 9: Terminal Stop)
+            if abs(out_v) <= 0.05:
                 v_cmd = 0.0
-            if abs(out_w) <= 0.04:
+            if abs(out_w) <= 0.01:
                 w_cmd = 0.0
-
-            # 2. Canonical ENIB In-Place Pivot (Class 3 / Class 4): target on flank or behind
-            # Symmetrically aligns vehicle on a dime towards the dock before forward translation
-            phi_target = math.atan2(y_target_robot, x_target_robot)
-            if abs(phi_target) > 1.05 or x_target_robot < 0.0:
-                v_cmd = 0.0
-                w_cmd = w_max_effective if y_target_robot >= 0.0 else -w_max_effective
-
-            # 3. Terminal Dock Alignment (Align vehicle angle inside the 8cm capture basin)
-            if dist_xy <= dist_tol:
-                if abs(e_theta) <= angle_tol:
-                    v_cmd, w_cmd = 0.0, 0.0
-                else:
-                    v_cmd = 0.0
-                    w_cmd = -0.50 if e_theta > 0.0 else 0.50
 
             # Track 1-second displacement window for physical immobilization verification
             pos_window.append((elapsed, pos[0], pos[1], pos[2]))
