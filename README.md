@@ -181,10 +181,10 @@ Ce terminal lance le réseau de neurones PioneerNN. Il lit automatiquement l'odo
 # Pour LIMO COBOT (ROS 2 Foxy) :
 source /opt/ros/foxy/setup.bash
 cd ~/limo-offline-learning
-python3 src/evaluation/run_autonomous.py --real
+python3 src/evaluation/run_autonomous.py --real --speed-scale 0.6
 ```
 
-*(Note : le script détecte automatiquement `/wheel/odom` et `/odom`. Vous pouvez aussi spécifier explicitement `--odom-topic /wheel/odom` si nécessaire).*
+*(Note : `--speed-scale 0.6` ajuste la vitesse maximale à 0.30 m/s pour des essais en laboratoire fluides et sans patinage des roues. La rampe de décélération progressive et le filtre d'accélération garantissent un amarrage en douceur).*
 
 *(Ou sous ROS 2 Humble : `source /opt/ros/humble/setup.bash && cd ~/limo-offline-learning && python3 src/evaluation/run_autonomous.py --real`)*
 

@@ -140,9 +140,9 @@ Dirija o robô até onde quiser (ex: $1.5\text{ m}$ ou $2.0\text{ m}$ de distân
 source /opt/ros/foxy/setup.bash
 cd ~/limo-offline-learning
 
-python3 src/evaluation/run_autonomous.py --real
+python3 src/evaluation/run_autonomous.py --real --speed-scale 0.6
 ```
-*(O script detecta automaticamente `/wheel/odom` ou `/odom`. Se quiser especificar manualmente: `--odom-topic /wheel/odom`).*
+*(O parâmetro `--speed-scale 0.6` ajusta a velocidade de cruzeiro para confortáveis $0.30\text{ m/s}$, evitando derrapagens das rodas no chão liso. O script também desacelera suavemente nos últimos 45 cm).*
 
 1. O script lerá a pose atual da odometria automaticamente e mostrará na tela:
    ```text
