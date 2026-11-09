@@ -70,7 +70,7 @@ python3 src/generate_dataset.py
 ### 1.2 Treinar a Rede Neural PioneerNN
 Treina a arquitetura MLP sem viés (`3 -> 1000 -> 2`, ativação $\tanh$):
 ```bash
-python3 src/train_offline.py --epochs 300 --lr 0.50 --beta 1.5
+python3 src/train_offline.py
 ```
 * **Pesos salvos**: `models/pioneer_model_weights.json` e `models/supervised_w_torch_diff.json`.
 
