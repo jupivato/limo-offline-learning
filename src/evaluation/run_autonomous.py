@@ -24,7 +24,7 @@ Core Functionalities:
 
 4. Kinematic Limits & Damping:
    - V_MAX = 0.50 m/s, W_MAX = 1.00 rad/s.
-   - Radial yaw rate damping via K_theta(x_R, y_R) in terminal radius.
+   - Pure 100% neural policy execution without external geometric heuristics.
 
 Standards Compliance: ROS REP-103 & ISO 18646-2.
 Project: LIMO Offline Learning (CERV / Lab-STICC / ENIB).
