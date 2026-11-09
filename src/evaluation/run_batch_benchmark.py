@@ -189,17 +189,23 @@ def run_simulated_benchmark_run(
         v_cmd = max(-V_MAX, min(V_MAX, out_v * V_MAX))
         w_cmd = max(-W_MAX, min(W_MAX, out_w * W_MAX))
 
-        # 1. Canonical ENIB In-Place Pivot (Class 3 / Class 4): target on flank or behind
+        # Denormalization to physical velocities
+        v_cmd = max(-V_MAX, min(V_MAX, out_v * V_MAX))
+        w_cmd = max(-W_MAX, min(W_MAX, out_w * W_MAX))
+
+        # 1. Canonical ENIB Deadband on Neural Network Outputs (Origin Invariance)
+        if abs(out_v) <= 0.08:
+            v_cmd = 0.0
+        if abs(out_w) <= 0.04:
+            w_cmd = 0.0
+
+        # 2. Canonical ENIB In-Place Pivot (Class 3 / Class 4): target on flank or behind
         phi_target = math.atan2(y_target_robot, x_target_robot)
         if abs(phi_target) > 1.05 or x_target_robot < 0.0:
             v_cmd = 0.0
             w_cmd = W_MAX if y_target_robot >= 0.0 else -W_MAX
 
-        # 2. Smooth Deceleration Funnel (Ramp within 35 cm of dock)
-        if dist_xy < 0.35 and dist_xy > dist_tol:
-            v_cmd *= max(0.25, dist_xy / 0.35)
-
-        # 3. Terminal Dock Capture Envelope (Class 9: Terminal Docking Stop)
+        # 3. Terminal Dock Alignment (Align vehicle angle inside the 8cm capture basin)
         if dist_xy <= dist_tol:
             if abs(e_theta) <= angle_tol:
                 v_cmd, w_cmd = 0.0, 0.0
@@ -333,17 +339,23 @@ def run_gazebo_benchmark_run(
         v_cmd = max(-V_MAX, min(V_MAX, out_v * V_MAX))
         w_cmd = max(-W_MAX, min(W_MAX, out_w * W_MAX))
 
-        # 1. Canonical ENIB In-Place Pivot (Class 3 / Class 4): target on flank or behind
+        # Denormalization to physical velocities
+        v_cmd = max(-V_MAX, min(V_MAX, out_v * V_MAX))
+        w_cmd = max(-W_MAX, min(W_MAX, out_w * W_MAX))
+
+        # 1. Canonical ENIB Deadband on Neural Network Outputs (Origin Invariance)
+        if abs(out_v) <= 0.08:
+            v_cmd = 0.0
+        if abs(out_w) <= 0.04:
+            w_cmd = 0.0
+
+        # 2. Canonical ENIB In-Place Pivot (Class 3 / Class 4): target on flank or behind
         phi_target = math.atan2(y_target_robot, x_target_robot)
         if abs(phi_target) > 1.05 or x_target_robot < 0.0:
             v_cmd = 0.0
             w_cmd = W_MAX if y_target_robot >= 0.0 else -W_MAX
 
-        # 2. Smooth Deceleration Funnel (Ramp within 35 cm of dock)
-        if dist_xy < 0.35 and dist_xy > dist_tol:
-            v_cmd *= max(0.25, dist_xy / 0.35)
-
-        # 3. Terminal Dock Capture Envelope (Class 9: Terminal Docking Stop)
+        # 3. Terminal Dock Alignment (Align vehicle angle inside the 8cm capture basin)
         if dist_xy <= dist_tol:
             if abs(e_theta) <= angle_tol:
                 v_cmd, w_cmd = 0.0, 0.0

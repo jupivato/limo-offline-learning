@@ -77,6 +77,7 @@ REVERSE_DEADBAND = 0.15        # Heading deadband for pure reverse driving (~8.6
 D_STOP = 0.060                 # Physical dock capture radius for terminal stop (6.0 cm)
 D_STOP_ANGLE_TOL = 0.100       # Heading alignment tolerance for terminal stop (~5.7°)
 MAX_PIVOT_PHI = 0.50           # Bearing threshold triggering in-place pivot (~28.6°, prevents wide turning circles)
+D_BRAKE = 0.40                 # Deceleration funnel threshold distance for smooth approach (40.0 cm)
 
 SAMPLES_PER_CLASS = 5000       # Stratified target quota per maneuver class
 COLUMNS = ["x_target_robot", "y_target_robot", "theta_robot", "v_robot", "w_robot"]
@@ -151,17 +152,19 @@ def expert_rule_based_controller(
     v_max: float = V_MAX,
     w_max: float = W_MAX,
     d_stop: float = D_STOP,
-    d_stop_angle_tol: float = D_STOP_ANGLE_TOL
+    d_stop_angle_tol: float = D_STOP_ANGLE_TOL,
+    d_brake: float = D_BRAKE
 ) -> Tuple[float, float, int]:
     """
-    Deterministic expert supervisor implementing smooth unicycle docking guidance.
+    Deterministic expert supervisor implementing smooth unicycle docking guidance
+    with a continuous linear deceleration funnel within the terminal braking zone.
 
     Input Features:
         x_tr, y_tr : Relative coordinates of the dock in robot body frame (m).
         theta_r    : Vehicle heading relative to the dock reference frame (rad).
 
     Outputs:
-        v, w        : Discrete ternary velocities {-v_max, 0, +v_max} and {-w_max, 0, +w_max}.
+        v, w        : Setpoint velocities with smooth deceleration in docking funnel.
         maneuver_id : Canonical ENIB maneuver identifier (1 to 9).
     """
     dist = math.hypot(x_tr, y_tr)
@@ -187,7 +190,11 @@ def expert_rule_based_controller(
 
     # 2. Reverse Parking Corridor (Dock situated directly behind: x_tr < -0.10m and |y_tr| <= 0.80m)
     if x_tr < -0.10 and abs(y_tr) <= 0.80:
-        v = -v_max
+        if dist < d_brake:
+            ramp = max(0.0, min(1.0, (dist - d_stop) / (d_brake - d_stop)))
+            v = -v_max * ramp
+        else:
+            v = -v_max
         phi_rear = math.atan2(y_tr, -x_tr)
         # Reverse steering error combines rear line-of-sight with terminal heading alignment
         effective_e_theta = 0.0 if abs(abs(e_theta) - math.pi) < 1e-4 else e_theta
@@ -210,7 +217,12 @@ def expert_rule_based_controller(
         return v, w, m_id
 
     # 4. Forward Cruise & Approach (Target in front: x_tr >= 0.0 and |phi| <= MAX_PIVOT_PHI)
-    v = v_max
+    if dist < d_brake:
+        ramp = max(0.0, min(1.0, (dist - d_stop) / (d_brake - d_stop)))
+        v = v_max * ramp
+    else:
+        v = v_max
+
     if dist < 0.60:
         # Near dock ingress: blend direct line-of-sight with terminal heading alignment
         effective_e_theta = 0.0 if abs(abs(e_theta) - math.pi) < 1e-4 else e_theta
@@ -288,9 +300,10 @@ def generate_balanced_dataset(
                 raw_samples_by_class[m_id].append([x, y, th, v, w])
 
     # --------------------------------------------------------------------------
-    # 4. High-Density Forward Steering Corridor (0.1m <= x <= 2.5m, |y| <= 0.6m, step 0.05m)
+    # 4. High-Density Forward Steering & Deceleration Corridor (0.06m <= x <= 2.5m)
+    # Fine 2cm resolution in braking funnel (0.06m to 0.50m) and 5cm in cruise corridor
     # --------------------------------------------------------------------------
-    fwd_xs = [round(0.10 + i * 0.05, 3) for i in range(49)]
+    fwd_xs = [round(0.06 + i * 0.02, 3) for i in range(23)] + [round(0.55 + i * 0.05, 3) for i in range(40)]
     fwd_ys = [round(-0.60 + i * 0.05, 3) for i in range(25)]
     fwd_thetas = [round(-math.pi + i * (2.0 * math.pi / 32), 4) for i in range(33)]
     for x in fwd_xs:

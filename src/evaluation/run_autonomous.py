@@ -239,18 +239,20 @@ def run_autonomous_session(
             v_cmd = max(-v_max_effective, min(v_max_effective, out_v * v_max_effective))
             w_cmd = max(-w_max_effective, min(w_max_effective, out_w * w_max_effective))
 
-            # 1. Canonical ENIB In-Place Pivot (Class 3 / Class 4): target on flank or behind
+            # 1. Canonical ENIB Deadband on Neural Network Outputs (Origin Invariance)
+            if abs(out_v) <= 0.08:
+                v_cmd = 0.0
+            if abs(out_w) <= 0.04:
+                w_cmd = 0.0
+
+            # 2. Canonical ENIB In-Place Pivot (Class 3 / Class 4): target on flank or behind
             # Symmetrically aligns vehicle on a dime towards the dock before forward translation
             phi_target = math.atan2(y_target_robot, x_target_robot)
             if abs(phi_target) > 1.05 or x_target_robot < 0.0:
                 v_cmd = 0.0
                 w_cmd = w_max_effective if y_target_robot >= 0.0 else -w_max_effective
 
-            # 2. Smooth Deceleration Funnel (Ramp within 35 cm of dock to prevent wheel skid and odometry drift)
-            if dist_xy < 0.35 and dist_xy > dist_tol:
-                v_cmd *= max(0.25, dist_xy / 0.35)
-
-            # 3. Terminal Dock Capture Envelope (Class 9: Terminal Docking Stop)
+            # 3. Terminal Dock Alignment (Align vehicle angle inside the 8cm capture basin)
             if dist_xy <= dist_tol:
                 if abs(e_theta) <= angle_tol:
                     v_cmd, w_cmd = 0.0, 0.0

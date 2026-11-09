@@ -77,7 +77,7 @@ from src.core.pioneer_nn import PioneerNN, compute_theta_strategic, recast_angle
 INPUT_SIZE = 3                 # 3 canonical normalized inputs [in_0, in_1, in_2]
 HIDDEN_SIZE = 1000             # Hidden layer dimension (ENIB PioneerNN specification)
 OUTPUT_SIZE = 2                # 2 normalized velocity setpoints [v_norm, w_norm]
-USE_BIAS = True                # False = Strict algebraic guarantee of MLP(0) = 0 at dock
+USE_BIAS = False               # False = Strict algebraic guarantee of MLP(0) = 0 at dock
 
 USE_ADAMW = True              # False = Pure SGD with momentum | True = AdamW
 LEARNING_RATE = 0.003         # High learning rate to drive Tanh into saturation regime
@@ -482,6 +482,8 @@ if __name__ == "__main__":
     parser.add_argument("--history", type=str, default=OUTPUT_HISTORY, help="Destination history path")
     parser.add_argument("--adamw", action="store_true", default=USE_ADAMW, help="Use AdamW optimizer")
     parser.add_argument("--sgd", action="store_false", dest="adamw", help="Force pure SGD optimizer (default)")
+    parser.add_argument("--bias", action="store_true", default=USE_BIAS, help="Enable layer bias")
+    parser.add_argument("--no-bias", action="store_false", dest="bias", help="Disable layer bias (guarantees MLP(0)==0)")
     args = parser.parse_args()
 
     train_offline(
@@ -493,5 +495,6 @@ if __name__ == "__main__":
         learning_rate=args.lr,
         momentum=args.momentum,
         beta=args.beta,
-        use_adamw=args.adamw
+        use_adamw=args.adamw,
+        use_bias=args.bias
     )
