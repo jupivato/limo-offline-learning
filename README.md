@@ -58,36 +58,37 @@ limo-offline-learning/
 ├── config/
 │   └── config.json                      # Spatial bounds, kinematic limits, & normalization
 ├── data/
-│   ├── dataset.csv                      # Canonical offline dataset (62,524 discrete samples)
+│   ├── dataset.csv                      # Canonical offline dataset (45,000 balanced samples)
 │   └── evaluation/                      # Evaluation telemetry & ISO benchmarks (git-ignored)
-│       └── test_yyyy_mm_dd_sec_min_hr/  # Timestamped test runs (params.json, data/, images/)
 ├── docs/
 │   ├── KINEMATICS_AND_NORMALIZATION_SPECIFICATION.md # Mathematical derivations & limits
-│   └── TUTORIAL_GAZEBO.md               # Complete Gazebo 3D simulation guide
+│   ├── docs/                            # Reference scientific papers & ISO standard guides
+│   └── images/                          # High-resolution benchmark and telemetry figures
 ├── models/
 │   ├── pioneer_model_weights.json       # Trained neural weights (JSON format)
 │   ├── supervised_w_torch_diff.json     # Synced weights mirror
-│   └── training_yyyy_mm_dd_sec_min_hr/  # Timestamped training runs (params, weights, curves)
+│   └── archive_old_trainings.zip        # Archived historical training logs
 ├── src/
 │   ├── generate_dataset.py              # Robot-centric discrete dataset generator
 │   ├── train_offline.py                 # Offline training pipeline (PioneerNN)
-│   ├── plot_curves.py                   # Training/validation loss curve plotter
 │   ├── core/
 │   │   ├── __init__.py
 │   │   └── pioneer_nn.py                # PioneerNN architecture (bias-free MLP)
 │   ├── ros2/
 │   │   ├── __init__.py
 │   │   └── limo_interface.py            # ROS 2 odometry transform & command publisher
-│   └── evaluation/
+│   ├── evaluation/
+│   │   ├── __init__.py
+│   │   ├── data_logger.py               # Real-time 20 Hz state recorder
+│   │   ├── run_autonomous.py            # Closed-loop autonomous controller (Hardware & Sim)
+│   │   └── run_batch_benchmark.py       # Automated multi-run testbench (ISO 18646-2)
+│   └── visualization/
 │       ├── __init__.py
-│       ├── data_logger.py               # Real-time 20 Hz state recorder
-│       ├── run_autonomous.py            # Closed-loop autonomous controller
-│       ├── run_batch_benchmark.py       # Automated multi-run testbench
-│       ├── evaluate_xy_plane.py         # XY plane model evaluation
-│       ├── plot_confusion_and_dataset_analysis.py # Confusion matrices and diagnostics
-│       └── benchmark_visualizer.py      # Trajectory visualizer and HTML dashboards
+│       ├── plot_curves.py               # Training/validation loss curve plotter
+│       ├── benchmark_visualizer.py      # Trajectory visualizer and HTML dashboards
+│       ├── evaluate_xy_plane.py         # XY plane model evaluation (Quiver & heatmaps)
+│       └── plot_confusion_and_dataset_analysis.py # Confusion matrices and diagnostics
 ├── requirements.txt
-├── COMANDOS.md                          # Sequential terminal execution cheatsheet
 ├── TUTORIAL.md                          # Comprehensive end-to-end user tutorial
 └── README.md
 ```
@@ -171,7 +172,7 @@ python3 src/train_offline.py
 Visualizes training and validation MSE curves:
 
 ```bash
-python3 src/plot_curves.py
+python3 src/visualization/plot_curves.py
 ```
 
 ### 5. Closed-Loop Evaluation & Benchmarking

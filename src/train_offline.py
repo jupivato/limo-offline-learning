@@ -439,7 +439,7 @@ def train_offline(
 
     # Plot training convergence curves
     try:
-        from src.plot_curves import plot_training_history
+        from src.visualization.plot_curves import plot_training_history
         plot_training_history(arch_history, output_dir=archive_dir)
         plot_training_history(history_output_path, output_dir="data/evaluation")
         print(f"[Success] Convergence curves generated in: {archive_dir}")

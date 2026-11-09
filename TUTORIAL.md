@@ -1,42 +1,47 @@
-# 📘 Manual Operacional Completo: LIMO Offline Learning & Gazebo 3D
+# 📘 Guia Operacional Padronizado: LIMO Offline Learning
 
-Este documento é o guia definitivo, completo e 100% prático para executar todas as etapas do projeto **AgileX LIMO**: desde a geração do dataset e treinamento da rede neural offline até os testes no simulador Gazebo 3D e no robô físico real.
-
-Tudo está **organizado em blocos sequenciais**, com comandos exatos prontos para copiar e colar.
+Guia unificado e definitivo para executar o projeto **AgileX LIMO**: desde a geração do dataset e treinamento da rede neural offline até os testes no simulador Gazebo 3D e no robô físico real.
 
 ---
 
-## 📑 Sumário dos Blocos
+## 🏗️ Estrutura Simplificada do Projeto
 
-* [Bloco 0: Preparação do Ambiente e Regra de Ouro](#-bloco-0-preparação-do-ambiente-e-regra-de-ouro)
-* [Bloco 1: Geração do Dataset Canônico (com Baliza/Ré)](#-bloco-1-geração-do-dataset-canônico-com-balizaré)
-* [Bloco 2: Treinamento Offline da Rede Neural (PioneerNN)](#-bloco-2-treinamento-offline-da-rede-neural-pioneernn)
-* [Bloco 3: Gráficos de Aprendizado e Diagnósticos Estatísticos](#-bloco-3-gráficos-de-aprendizado-e-diagnósticos-estatísticos)
-* [Bloco 4: Gazebo 3D — Teste de Navegação Individual (Single Run)](#-bloco-4-gazebo-3d--teste-de-navegação-individual-single-run)
-* [Bloco 5: Gazebo 3D — Benchmark Automatizado de 20 Posições (ISO 18646-2)](#-bloco-5-gazebo-3d--benchmark-automatizado-de-20-posições-iso-18646-2)
-* [Bloco 6: Terminal de Monitoramento e Diagnóstico em Tempo Real](#-bloco-6-terminal-de-monitoramento-e-diagnóstico-em-tempo-real)
-* [Bloco 7: Execução no Robô Físico Real LIMO](#-bloco-7-execução-no-robô-físico-real-limo)
-* [Bloco 8: Solução Imediata de Problemas (Troubleshooting)](#-bloco-8-solução-imediata-de-problemas-troubleshooting)
-
----
-
-## ⚡ Bloco 0: Preparação do Ambiente e Regra de Ouro
-
-### 0.1 Limpeza Prévia (Evita 99% das falhas no Gazebo)
-Se você já abriu o simulador antes ou ele fechou inesperadamente, sempre rode este comando para matar processos fantasmas que travam as portas do ROS 2:
-
-```bash
-killall -9 gzserver gzclient
+```
+limo-offline-learning/
+├── src/
+│   ├── core/              # Arquitetura da rede neural PioneerNN (Tanh, sem viés)
+│   ├── ros2/              # Interface com hardware e tópicos (/odom, /cmd_vel)
+│   ├── evaluation/        # Scripts de execução autônoma e benchmarks ISO
+│   │   ├── run_autonomous.py       # Navegação individual (robô real e simulação)
+│   │   ├── run_batch_benchmark.py  # Bateria estendida de 20 ensaios ISO 18646-2
+│   │   └── data_logger.py          # Gravação de telemetria em CSV
+│   ├── visualization/     # Central de geração de gráficos e dashboards
+│   │   ├── plot_curves.py          # Curvas de convergência do treinamento
+│   │   ├── benchmark_visualizer.py # Painéis ISO, trajetórias e dashboard HTML
+│   │   ├── evaluate_xy_plane.py    # Campo vetorial 2D (Quiver) e heatmaps
+│   │   └── plot_confusion_and_dataset_analysis.py # Matrizes de confusão
+│   ├── generate_dataset.py # Gerador do dataset canônico de 45.000 amostras
+│   └── train_offline.py    # Treinamento offline supervisionado da PioneerNN
+├── models/                # Pesos ativos da rede neural e histórico de treino
+│   ├── pioneer_model_weights.json
+│   └── supervised_w_torch_diff.json
+├── data/
+│   ├── dataset.csv        # Dataset balanceado (5.000 amostras por classe ENIB)
+│   └── evaluation/        # Telemetria e imagens de ensaios salvos
+└── TUTORIAL.md            # Este manual operacional unificado
 ```
 
-### 0.2 Carregamento Básico (Necessário em qualquer terminal novo)
-Antes de rodar qualquer comando que envolva ROS 2, Gazebo ou o robô:
+---
+
+## ⚡ Passo 0: Preparação do Ambiente ROS 2
+
+Sempre que abrir um novo terminal para executar comandos do projeto, execute:
 
 ```bash
 # 1. Carrega o ROS 2 Humble
 source /opt/ros/humble/setup.bash
 
-# 2. Carrega os pacotes compilados do robô LIMO
+# 2. Carrega os pacotes do robô AgileX LIMO
 source ~/ros2_ws/install/setup.bash
 
 # 3. Entra na pasta do projeto
@@ -44,244 +49,128 @@ cd ~/Documentos/PPE/limo-offline-learning
 ```
 
 > [!NOTE]
-> **Padrão de Unidades do Projeto (Norma ROS REP-103)**:
+> **Padrões de Unidades Físicas (Norma ROS REP-103)**:
 > - **Velocidade Linear ($v$)**: $\text{m/s}$ (máximo $0.50\text{ m/s}$).
-> - **Velocidade Angular ($\omega$)**: sempre em $\text{rad/s}$ (máximo $1.00\text{ rad/s} \approx 57.3^\circ/\text{s}$, nunca em graus/s).
+> - **Velocidade Angular ($\omega$)**: $\text{rad/s}$ (máximo $1.00\text{ rad/s} \approx 57.3^\circ/\text{s}$).
 > - **Orientação e Ângulos ($\theta$)**: radianos em $[-\pi, +\pi]$.
-> - **Coordenadas ($x, y$)**: metros no intervalo $[-5.0, +5.0]\text{ m}$.
 
 ---
 
-## 🗄️ Bloco 1: Geração do Dataset Canônico (com Baliza/Ré)
+## 🗄️ Passo 1: Dataset & Treinamento da Rede Neural
 
-*(Nota: O dataset canônico com **62.524 amostras** já vem pronto e balanceado em `data/dataset.csv`. Só rode este bloco se quiser recriá-lo do zero).*
+*(Nota: O dataset canônico com 45.000 amostras e os pesos já estão prontos. Use estes comandos se desejar recriar ou retreinar).*
 
+### 1.1 Gerar o Dataset Canônico (45.000 amostras balanceadas)
+Gera o dataset cobrindo os 4 quadrantes, espelhamento sagital e costura de fronteira periódica ($-\pi \equiv +\pi$):
 ```bash
-cd ~/Documentos/PPE/limo-offline-learning
 python3 src/generate_dataset.py
 ```
+* **Arquivo gerado**: `data/dataset.csv` (exatamente 5.000 amostras em cada uma das 9 classes da ENIB).
 
-### O que este script faz:
-1. Amostra uma grade uniforme de $-5.0\text{ m}$ a $+5.0\text{ m}$ a cada $0.5\text{ m}$.
-2. Gera uma subgrade fina de atracação ao redor da doca ($|x|, |y| \le 0.6\text{ m}$).
-3. **Lógica de Baliza Inteligente (Parallel Parking)**:
-   - Se a doca estiver atrás ($x_{tr} < 0$) e desalinhada, gira no próprio eixo apontando a traseira para o alvo.
-   - Engata marcha à ré ($v = -0.50\text{ m/s}$) e esterça coordenado até o estacionamento.
-4. Aplica espelhamento bilateral sagital ($(x, y, \theta, v, \omega) \implies (x, -y, -\theta, v, -\omega)$) garantindo simetria perfeita sem viés direcional.
-* **Arquivo gerado**: `data/dataset.csv` (62.524 linhas, 5 colunas).
+### 1.2 Treinar a Rede Neural PioneerNN
+Treina a arquitetura MLP sem viés (`3 -> 1000 -> 2`, ativação $\tanh$):
+```bash
+python3 src/train_offline.py --epochs 300 --lr 0.50 --beta 1.5
+```
+* **Pesos salvos**: `models/pioneer_model_weights.json` e `models/supervised_w_torch_diff.json`.
 
 ---
 
-## 🧠 Bloco 2: Treinamento Offline da Rede Neural (PioneerNN)
+## 🏎️ Passo 2: Simulação no Gazebo 3D (Suite Estendida de 20 Ensaios)
 
-Treina a rede neural MLP bias-free (`3 -> 1000 -> 2`, ativação $\tanh$, sem bias para garantir $\text{MLP}(0,0,0) = [0, 0]$):
-
+### 🖥️ Terminal 1 — Abrir o Simulador Gazebo
 ```bash
-cd ~/Documentos/PPE/limo-offline-learning
-python3 src/train_offline.py
-```
+# Limpeza prévia de processos antigos
+killall -9 gzserver gzclient 2>/dev/null
 
-### Configurações Ativas no Código:
-* **Otimizador**: SGD Puro Constante (`USE_ADAMW = False`, `LEARNING_RATE = 0.001`).
-* **Épocas**: 150 épocas completas.
-* **Função de Perda**: MSE ponderada com foco na precisão de ângulo.
-
-### Arquivos Salvos e Organização por Timestamp:
-A cada treino, o script cria automaticamente uma pasta rastreável com a data e hora exata:
-`models/training_yyyy_mm_dd_sec_min_hr/`
-* `training_params.json` — Arquivo JSON completo contendo: taxa de aprendizado (`lr`), otimizador (`AdamW`/`SGD`), número de épocas, perdas finais, `weight_decay`, agendador e caminhos dos artefatos.
-* `pioneer_model_weights.json` — Pesos da rede neural salvos e organizados.
-* `supervised_w_torch_diff.json` — Cópia espelhada dos pesos para integração direta.
-* `training_history.json` — Histórico detalhado de perdas de treino e validação a cada época.
-* `training_curves.png` e `training_curves.svg` — Gráficos vetoriais de perda e convergência daquele treinamento.
-
-*(Nota: Para total compatibilidade com comandos diretos, os pesos também são sincronizados na raiz `models/`).*
-
----
-
-## 📈 Bloco 3: Gráficos de Aprendizado e Diagnósticos Estatísticos
-
-Execute estes comandos a partir da raiz do projeto (`cd ~/Documentos/PPE/limo-offline-learning`):
-
-### 3.1 Gerar Curva de Convergência (Perda MSE ao longo das 150 épocas)
-```bash
-python3 src/plot_curves.py
-```
-* **Salva em**: `data/evaluation/training_curves.png` e `training_curves.svg`.
-
-### 3.2 Matrizes de Confusão e Análise 2D do Dataset
-Verifica a acurácia de classificação discreta nas 62.524 amostras:
-```bash
-python3 src/evaluation/plot_confusion_and_dataset_analysis.py
-```
-* **Gera**:
-  * Matriz de confusão linear 3x3 (Ré, Parado, Frente).
-  * Matriz de confusão angular 3x3 (Horário, Reto, Anti-horário).
-  * Densidade 2D do dataset e histogramas de predição.
-
-### 3.3 Campo Vetorial 2D (Quiver) e Perfis Axiais
-Mapeia o campo contínuo de setas de direção em toda a arena de $5\times 5\text{ m}$:
-```bash
-python3 src/evaluation/evaluate_xy_plane.py
-```
-
----
-
-## 🏎️ Bloco 4: Gazebo 3D — Teste de Navegação Individual (Single Run)
-
-Use quando quiser ver o robô saindo de uma posição específica e manobrando no Gazebo 3D até a doca `(0, 0, 0)`.
-
-### 🖥️ Terminal 1 — Abrir o Simulador Gazebo 3D
-```bash
-# 1. Carregar ROS 2 e o LIMO
-source /opt/ros/humble/setup.bash
-source ~/ros2_ws/install/setup.bash
-
-# 2. Lançar a simulação com o modelo diferencial
-ros2 launch limo_description gazebo_models_diff.launch.py
-```
-
-> ⚠️ **Atenção no Gazebo**:
-> Espere a janela 3D abrir com o chão cinza e o robô no centro `(0,0,0)`.
-> Verifique se o botão no canto inferior esquerdo está em **Play** (se estiver pausado, clique nele ou aperte a **barra de espaço**).
-
----
-
-### 🖥️ Terminal 2 — Executar o Controlador da Rede Neural
-Abra um **segundo terminal** (mantenha o Terminal 1 aberto rodando o Gazebo):
-
-```bash
-# 1. Carregar ambiente
-source /opt/ros/humble/setup.bash
-source ~/ros2_ws/install/setup.bash
-
-# 2. Entrar na pasta do projeto
-cd ~/Documentos/PPE/limo-offline-learning
-
-# 3. Teletransportar o robô para o ponto inicial e navegar até a doca (0,0,0)
-python3 src/evaluation/run_autonomous.py \
-    --weights models/pioneer_model_weights.json \
-    --teleport-to 2.0 2.0 0.0 \
-    --target 0.0 0.0 0.0
-```
-
-#### 💡 Exemplos de Outras Posições para Testar (Só mudar o `--teleport-to`):
-* **Frente longa:** `--teleport-to 3.0 0.0 0.0`
-* **Lateral oblíqua:** `--teleport-to 1.5 2.0 0.0`
-* **Baliza / Ré (Parallel Parking):** `--teleport-to 1.5 0.8 0.0` *(o robô gira, dá ré e estaciona)*
-* **Ré pura atrás da doca:** `--teleport-to -2.0 0.0 0.0`
-
-Ao terminar a manobra ou ser detectada a parada do robô (corte imediato), uma pasta com a data e hora exata do teste é criada:
-`data/evaluation/test_yyyy_mm_dd_sec_min_hr/`
-* `params.json` — Arquivo com todos os parâmetros do teste (ponto de partida, pose final, erro de distância, erro angular, limites cinemáticos, tempo decorrido, etc.).
-* Subpasta `data/` — Contém o arquivo CSV de telemetria completa (`eval_success.csv` ou `eval_stop.csv`).
-* Subpasta `images/` — Contém o gráfico individual da trajetória gerado (`eval_success.png` ou `eval_stop.png`).
-
----
-
-## 🏆 Bloco 5: Gazebo 3D — Benchmark Automatizado de 20 Posições (ISO 18646-2)
-
-Neste modo, o robô é teletransportado **automaticamente** para 20 posições diferentes cobrindo os 4 quadrantes (distâncias curta, média e longa, com vários ângulos), executa as manobras no Gazebo e calcula as métricas oficiais da norma ISO 18646-2.
-
-### 🖥️ Terminal 1 — Abrir o Gazebo 3D
-Se já estiver aberto do Bloco 4, mantenha-o aberto. Se não:
-```bash
+# Inicializar o mundo Gazebo com o modelo LIMO diferencial
 source /opt/ros/humble/setup.bash
 source ~/ros2_ws/install/setup.bash
 ros2 launch limo_description gazebo_models_diff.launch.py
 ```
+> Espere a janela 3D abrir com o chão cinza e o robô no centro `(0, 0, 0)`. Verifique se o botão no canto inferior esquerdo está em **Play**.
 
----
-
-### 🖥️ Terminal 2 — Iniciar o Benchmark Automatizado de 20 Posições
+### 🖥️ Terminal 2 — Executar o Benchmark Automatizado de 20 Ensaios ISO 18646-2
 ```bash
-# 1. Carregar ambiente e ir ao projeto
 source /opt/ros/humble/setup.bash
 source ~/ros2_ws/install/setup.bash
 cd ~/Documentos/PPE/limo-offline-learning
 
-# 2. Executar o benchmark com a flag --gazebo OBRIGATÓRIA
-python3 src/evaluation/run_batch_benchmark.py \
-    --gazebo \
-    --suite extended \
-    --weights models/pioneer_model_weights.json
+python3 src/evaluation/run_batch_benchmark.py --suite extended --gazebo
 ```
-
-> [!IMPORTANT]
-> **A flag `--gazebo` é OBRIGATÓRIA para rodar no simulador 3D!**
-> Se você omitir `--gazebo` (ou usar `--sim`), o script rodará em simulação cinemática matemática instantânea a 20 Hz.
->
-> **Corte Antecipado (Stall Detection)**:
-> Assim que o carrinho para de se mover na arena, a simulação daquele ensaio é cortada imediatamente (não espera 60 segundos à toa).
-
-#### 📊 Estrutura Automática do Teste (`data/evaluation/test_yyyy_mm_dd_sec_min_hr/`):
-A cada bateria de testes, uma pasta com o timestamp exato é criada:
-* `params.json` — JSON completo com: modelo testado, limites cinemáticos ($V_{\max}$, $\Omega_{\max}$), tolerâncias, configuração do stall detection, métricas da norma ISO 18646-2 ($A_p, A_o, R_p, R_o$) e o resumo detalhado de cada um dos ensaios.
-* Subpasta `data/` — Contém todos os CSVs:
-  * `run_1_q1.csv` ... `run_20_q4.csv` — Telemetria ponto a ponto de cada ensaio.
-  * `iso_18646_metrics.csv` — Tabela oficial das métricas consolidadas.
-* Subpasta `images/` — Contém todos os gráficos e relatórios visuais:
-  * `run_1_q1.png` ... `run_20_q4.png` — Gráficos individuais 3x3 de cada corrida.
-  * `benchmark_trajectory.png` — Imagem com todas as trajetórias sobrepostas na arena.
-  * `benchmark_all.png` — Painel com subgráficos de telemetria completa.
-  * `benchmark_quadrants.png` — Trajetórias divididas pelos Quadrantes 1, 2, 3 e 4.
-  * `benchmark_trajectory.svg` — Versão vetorial pura SVG da arena.
-  * `benchmark_dashboard.html` — Painel interativo para abrir no navegador.
-
-*(Nota: Para máxima compatibilidade com ferramentas legadas, os resultados também são espelhados em `data/evaluation/batch_run/`).*
+* O robô navega automaticamente pelos 20 cenários cobrindo todos os quadrantes.
+* Ao final, calcula $A_p$ (precisão posicional), $A_o$ (precisão angular) e verifica os 30 segundos contínuos de imobilização (*dwell time*).
 
 ---
 
-## 🔍 Bloco 6: Terminal de Monitoramento e Diagnóstico em Tempo Real (Terminal 3 - Opcional)
+## 🤖 Passo 3: Execução no Robô Físico Real LIMO
 
-Se você quiser abrir um terceiro terminal para espionar os tópicos do robô enquanto ele se move no Gazebo:
+No robô real, você **não precisa digitar nenhuma coordenada manual**. O robô lê a odometria acumulada das rodas automaticamente!
 
+### 3.1 Terminal 1 no Robô — Inicializar o Driver dos Motores
+Coloque o robô parado exatamente no local onde você quer que seja a doca/meta $(0, 0, 0)$ e execute:
 ```bash
 source /opt/ros/humble/setup.bash
-
-# 1. Conferir a frequência da odometria (deve marcar ~30-50 Hz)
-ros2 topic hz /odom
-
-# 2. Ver as coordenadas (X, Y) e ângulo do robô em tempo real
-ros2 topic echo /odom --once
-
-# 3. Ver os comandos de velocidade enviados pela rede neural
-ros2 topic echo /cmd_vel
-
-# 4. Parada de emergência manual (forçar parada imediata dos motores)
-ros2 topic pub /cmd_vel geometry_msgs/msg/Twist "{linear: {x: 0.0}, angular: {z: 0.0}}" --once
+ros2 launch limo_bringup limo_start.launch.py
 ```
+*(O robô zera a odometria como $(0, 0, 0)$ e trava os motores).*
 
----
+### 3.2 Dirigir o Robô até o Ponto de Início
+Com o controle remoto ou teleop, dirija o robô até onde quiser iniciar o teste (por exemplo, a $1.5\text{ m}$ ou $2.0\text{ m}$ de distância, torto ou virado para o lado).
 
-## 🤖 Bloco 7: Execução no Robô Físico Real LIMO
-
-Para rodar a rede neural embarcada no próprio computador do robô AgileX LIMO real (Intel NUC ou Jetson Nano):
-
+### 3.3 Terminal 2 no Robô — Lançar a Navegação Autônoma
 ```bash
-# 1. Carregar ambiente do ROS 2 no robô
 source /opt/ros/humble/setup.bash
-cd ~/Documentos/PPE/limo-offline-learning
+cd ~/limo-offline-learning
 
-# 2. Executar com a flag de proteção de hardware (--real)
-python3 src/evaluation/run_autonomous.py \
-    --weights models/pioneer_model_weights.json \
-    --target 0.0 0.0 0.0 \
-    --real
+python3 src/evaluation/run_autonomous.py --real
 ```
-
-> A flag `--real` ativa as travas de segurança de torque, impedindo comandos bruscos que possam danificar as caixas de redução das rodas.
+1. O script lerá a pose atual do `/odom` e mostrará na tela:
+   ```text
+   [Odometry] Current robot pose: x=1.84 m, y=0.92 m, theta=34.2°
+   [Ready] Press Enter to start autonomous docking...
+   ```
+2. Aperte **Enter**! O PioneerNN assumirá o controle, fará a aproximação em contorno suave e estacionará no $(0, 0, 0)$ com imobilização de 30 segundos.
 
 ---
 
-## 🚨 Bloco 8: Solução Imediata de Problemas (Troubleshooting)
+## 📊 Passo 4: Geração de Gráficos e Diagnósticos (`src/visualization/`)
 
-| Sintoma Observado | Causa Mais Provável | O que fazer para resolver |
-| :--- | :--- | :--- |
-| **O robô não se mexe no Gazebo** | O simulador abriu com a física pausada | Aperte a **barra de espaço** ou clique no botão **Play** no canto inferior esquerdo do Gazebo. |
-| **O teste rodou em 2 segundos e nada aconteceu no Gazebo** | Faltou a flag `--gazebo` no comando | Sempre inclua `--gazebo`: `python3 src/evaluation/run_batch_benchmark.py --gazebo ...` |
-| **`Package 'limo_description' not found`** | O workspace do robô não foi carregado | Rode `source ~/ros2_ws/install/setup.bash` no terminal atual. |
-| **`ModuleNotFoundError: No module named 'rclpy'`** | O ROS 2 Humble não foi carregado | Rode `source /opt/ros/humble/setup.bash` no terminal atual. |
-| **Gazebo trava na inicialização ou tela fica cinza** | Processos antigos órfãos estão presos na memória | Rode `killall -9 gzserver gzclient` e tente abrir o Terminal 1 novamente. |
-| **`unrecognized arguments` no `run_autonomous.py`** | Argumento antigo digitado | O comando aceita `--teleport-to X Y TH` e `--target X Y TH` (nunca use `--x-target`). |
-| **`Failed to import torch`** | Ambiente Python sem acesso aos pacotes locais | Todos os scripts possuem detecção automática de caminhos locais e snap, mas se necessário rode no venv correto: `source ~/ros2_ws/venv/bin/activate`. |
+Todos os códigos de plotagem foram centralizados na pasta `src/visualization/`:
+
+### 4.1 Gráfico de Convergência do Treino (Perda MSE e Acurácia)
+```bash
+python3 src/visualization/plot_curves.py
+```
+* **Salva em**: `data/evaluation/training_curves.png` e `.svg`.
+
+### 4.2 Painel Consolidado de Trajetórias e Dashboard HTML
+Gera o dashboard interativo e a prancha de trajetórias a partir de qualquer pasta de testes:
+```bash
+python3 src/visualization/benchmark_visualizer.py --dir data/evaluation/test_2026_11_04_14_24_14/data
+```
+* **Gera**: `benchmark_trajectory.png`, `benchmark_all.png` e `benchmark_dashboard.html`.
+
+### 4.3 Campo Vetorial 2D (Quiver) e Perfis Axiais
+Gera o mapa de vetores da arena e a resposta de velocidade no plano $XY$:
+```bash
+python3 src/visualization/evaluate_xy_plane.py
+```
+
+### 4.4 Matrizes de Confusão das 9 Manobras Canônicas
+Avalia as previsões discretas da rede contra o supervisor especialista nas 45.000 amostras:
+```bash
+python3 src/visualization/plot_confusion_and_dataset_analysis.py
+```
+* **Gera**: Matriz de confusão linear 3x3, matriz de confusão angular 3x3 e distribuição espacial em `docs/images/`.
+
+---
+
+## 🆘 Resumo de Comandos Rápidos e Troubleshooting
+
+| Ação | Comando |
+| :--- | :--- |
+| **Matar processos travados do Gazebo** | `killall -9 gzserver gzclient 2>/dev/null` |
+| **Parada de emergência imediata do robô** | `ros2 topic pub /cmd_vel geometry_msgs/msg/Twist "{linear: {x: 0.0}, angular: {z: 0.0}}" --once` |
+| **Verificar frequência da odometria** | `ros2 topic hz /odom` |
+| **Copiar resultados do robô para o PC** | `scp -r agilex@<IP_ROBO>:~/limo-offline-learning/data/evaluation/test_* ./` |

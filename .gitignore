@@ -43,6 +43,7 @@ data/curated/**/*.html
 data/evaluation/
 docs/images/
 docs/docs/
+*.zip
 *.png
 *.jpg
 *.svg

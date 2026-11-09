@@ -540,7 +540,7 @@ def run_batch_benchmark(
 
         # 4. Generate Comparative Visualizer Reports
         try:
-            from src.evaluation.benchmark_visualizer import generate_all_evaluation_reports
+            from src.visualization.benchmark_visualizer import generate_all_evaluation_reports
             generate_all_evaluation_reports(
                 batch_dir=data_dir,
                 prefix="benchmark",
