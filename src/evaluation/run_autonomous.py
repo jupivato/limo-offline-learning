@@ -158,15 +158,32 @@ def run_autonomous_session(
     # Initial repositioning / teleportation
     init_pos = robot.get_position()
     init_dist = math.hypot(init_pos[0] - target[0], init_pos[1] - target[1])
+    print(f"[Odometry] Current robot pose: x={init_pos[0]:.3f} m, y={init_pos[1]:.3f} m, theta={math.degrees(init_pos[2]):.1f}° (Distance to target: {init_dist:.2f} m)")
 
     if teleport_to is not None and not is_real:
         print(f"[Gazebo] Teleporting robot to starting pose: {teleport_to}")
         robot.teleport_gazebo(teleport_to[0], teleport_to[1], teleport_to[2])
         time.sleep(0.4)
+    elif teleport_to is not None and is_real:
+        print(f"[Hardware] Calibrating physical starting pose relative to target: {teleport_to}")
+        robot.reset_pose(teleport_to[0], teleport_to[1], teleport_to[2])
+        time.sleep(0.2)
     elif init_dist < dist_tol and not is_real:
         print("[Notice] Robot initialized inside dock. Teleporting to default benchmark starting pose [2.0, 2.0, 0.0]...")
         robot.teleport_gazebo(2.0, 2.0, 0.0)
         time.sleep(0.4)
+    elif init_dist < dist_tol and is_real:
+        print(f"[Warning] Robot is already at the dock ({init_dist*100:.1f} cm <= {dist_tol*100:.1f} cm).")
+        print("Drive the robot to your desired starting position before launching, or check if /odom is zeroed at the start position.")
+
+    if is_real:
+        try:
+            input("\n[Ready] Press Enter to start autonomous docking...")
+        except (KeyboardInterrupt, EOFError):
+            print("\n[Aborted] Mission cancelled by user.")
+            robot.cleanup()
+            rclpy.shutdown()
+            return False
 
     success = False
     start_time = time.time()
