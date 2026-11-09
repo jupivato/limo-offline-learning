@@ -201,8 +201,6 @@ def run_autonomous_session(
     start_time = time.time()
     dt = 0.050  # 20 Hz loop period
     dwell_timer = 0.0
-    prev_v = 0.0
-    prev_w = 0.0
     dock_arrival_announced = False
     pos_window: collections.deque[Tuple[float, float, float, float]] = collections.deque(maxlen=20)  # 1-second window
 
@@ -232,46 +230,15 @@ def run_autonomous_session(
 
             cost = in_0 ** 2 + in_1 ** 2 + in_2 ** 2
 
-            # Neural network inference (3 canonical inputs)
+            # Pure End-to-End Neural Policy Execution (PioneerNN)
+            # The neural network autonomously decides linear (v) and angular (w) velocities.
             cmd_raw = model([in_0, in_1, in_2])
             out_v = float(cmd_raw[0])
             out_w = float(cmd_raw[1])
 
-            # Physical velocity denormalization with speed scaling
+            # Denormalization to physical velocities with optional cruise speed scale
             v_cmd = max(-v_max_effective, min(v_max_effective, out_v * v_max_effective))
             w_cmd = max(-w_max_effective, min(w_max_effective, out_w * w_max_effective))
-
-            # 1. Anti-orbit & lateral flank pivot: turn directly on a dime towards the dock
-            phi_target = math.atan2(y_target_robot, x_target_robot)
-            if abs(phi_target) > 1.05 or x_target_robot < 0.0:
-                v_cmd = 0.0
-                w_cmd = w_max_effective if y_target_robot > 0.0 else -w_max_effective
-
-            # 2. Smooth Deceleration Funnel (Ramp within 45 cm of dock to prevent abrupt braking and wheel skidding)
-            D_DECEL = 0.45
-            if dist_xy < D_DECEL:
-                v_ramp = max(0.18, dist_xy / D_DECEL)
-                v_cmd *= v_ramp
-                w_cmd *= max(0.35, dist_xy / D_DECEL)
-
-            # 3. Terminal Dock Capture Envelope: gentle proportional micro-alignment
-            if dist_xy <= dist_tol:
-                if abs(e_theta) <= angle_tol:
-                    v_cmd, w_cmd = 0.0, 0.0
-                else:
-                    v_cmd = 0.0
-                    # Gentle proportional alignment to prevent violent wheel spin
-                    w_align = max(-0.35, min(0.35, -1.2 * e_theta))
-                    if abs(w_align) < 0.12 and abs(e_theta) > 0.03:
-                        w_align = 0.15 if w_align > 0.0 else -0.15
-                    w_cmd = w_align
-
-            # 4. Acceleration Slew-Rate Limiter (Continuous transitions, zero wheel skid)
-            max_dv = 0.80 * dt  # 0.80 m/s^2 linear accel limit (~0.04 m/s per tick)
-            max_dw = 2.50 * dt  # 2.50 rad/s^2 angular accel limit (~0.125 rad/s per tick)
-            v_cmd = max(prev_v - max_dv, min(prev_v + max_dv, v_cmd))
-            w_cmd = max(prev_w - max_dw, min(prev_w + max_dw, w_cmd))
-            prev_v, prev_w = v_cmd, w_cmd
 
             # Track 1-second displacement window for physical immobilization verification
             pos_window.append((elapsed, pos[0], pos[1], pos[2]))
@@ -284,17 +251,21 @@ def run_autonomous_session(
                 d_rot_window = 0.0
 
             # Velocity-level and physical immobilization criteria
-            is_stopped_cmds = (abs(v_cmd) < 0.03 and abs(w_cmd) < 0.04)
-            is_stopped_motion = (len(pos_window) >= 20 and d_moved_window < 0.008 and d_rot_window < 0.02)
+            is_stopped_cmds = (abs(v_cmd) < 0.06 and abs(w_cmd) < 0.06)
+            is_stopped_motion = (len(pos_window) >= 20 and d_moved_window < 0.010 and d_rot_window < 0.03)
             is_stationary = is_stopped_cmds or is_stopped_motion
 
-            # Docking Zone Arrival & Continuous Dwell-Time Watchdog
+            # Docking Zone Arrival & Continuous Dwell-Time Watchdog (ISO 18646-2)
             in_dock_envelope = (dist_xy <= dist_tol and abs(e_theta) <= angle_tol)
 
-            if in_dock_envelope and not dock_arrival_announced:
-                print(f"\n[Dock Arrival] Robot entered capture envelope (d={dist_xy*100:.1f} cm, θ={math.degrees(abs(e_theta)):.1f}°)! Holding stationary for {dwell_time_required:.0f}s dwell test...")
-                dock_arrival_announced = True
-            elif not in_dock_envelope:
+            if in_dock_envelope:
+                if is_stationary:
+                    # Vehicle naturally stopped at dock: engage zero-velocity hold for ISO 30s dwell test
+                    v_cmd, w_cmd = 0.0, 0.0
+                if not dock_arrival_announced:
+                    print(f"\n[Dock Arrival] Robot arrived in dock envelope (d={dist_xy*100:.1f} cm, θ={math.degrees(abs(e_theta)):.1f}°)! Holding for {dwell_time_required:.0f}s dwell test...")
+                    dock_arrival_announced = True
+            else:
                 dock_arrival_announced = False
 
             if elapsed > 1.0 and in_dock_envelope and is_stationary:

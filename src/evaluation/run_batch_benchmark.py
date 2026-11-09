@@ -185,23 +185,9 @@ def run_simulated_benchmark_run(
         out_v = float(cmd_raw[0])
         out_w = float(cmd_raw[1])
 
-        # Physical velocity denormalization
+        # Pure End-to-End Neural Policy Execution (PioneerNN)
         v_cmd = max(-V_MAX, min(V_MAX, out_v * V_MAX))
         w_cmd = max(-W_MAX, min(W_MAX, out_w * W_MAX))
-
-        # 1. Anti-orbit & lateral flank pivot: turn directly on a dime towards the dock
-        phi_target = math.atan2(y_target_robot, x_target_robot)
-        if abs(phi_target) > 1.05 or x_target_robot < 0.0:
-            v_cmd = 0.0
-            w_cmd = W_MAX if y_target_robot > 0.0 else -W_MAX
-
-        # 2. Terminal dock capture envelope: zero heading alignment and full immobilization
-        if dist_xy <= dist_tol:
-            if abs(e_theta) <= angle_tol:
-                v_cmd, w_cmd = 0.0, 0.0
-            else:
-                v_cmd = 0.0
-                w_cmd = -W_MAX if e_theta > 0.0 else W_MAX
 
         # Physical immobilization window verification
         pos_window.append((elapsed, x, y, th))
@@ -213,12 +199,14 @@ def run_simulated_benchmark_run(
             d_moved_window = 0.0
             d_rot_window = 0.0
 
-        is_stopped_cmds = (abs(v_cmd) < 0.03 and abs(w_cmd) < 0.04)
-        is_stopped_motion = (len(pos_window) >= 20 and d_moved_window < 0.008 and d_rot_window < 0.02)
+        is_stopped_cmds = (abs(v_cmd) < 0.06 and abs(w_cmd) < 0.06)
+        is_stopped_motion = (len(pos_window) >= 20 and d_moved_window < 0.010 and d_rot_window < 0.03)
         is_stationary = is_stopped_cmds or is_stopped_motion
 
         # Continuous stationary dwell within capture envelope
         in_dock_envelope = (dist_xy <= dist_tol and abs(e_theta) <= angle_tol)
+        if in_dock_envelope and is_stationary:
+            v_cmd, w_cmd = 0.0, 0.0
 
         if step > 20 and in_dock_envelope and is_stationary:
             dwell_timer += dt
@@ -325,22 +313,9 @@ def run_gazebo_benchmark_run(
         out_v = float(cmd_raw[0])
         out_w = float(cmd_raw[1])
 
+        # Pure End-to-End Neural Policy Execution (PioneerNN)
         v_cmd = max(-V_MAX, min(V_MAX, out_v * V_MAX))
         w_cmd = max(-W_MAX, min(W_MAX, out_w * W_MAX))
-
-        # 1. Anti-orbit & lateral flank pivot: turn directly on a dime towards the dock
-        phi_target = math.atan2(y_target_robot, x_target_robot)
-        if abs(phi_target) > 1.05 or x_target_robot < 0.0:
-            v_cmd = 0.0
-            w_cmd = W_MAX if y_target_robot > 0.0 else -W_MAX
-
-        # 2. Terminal dock capture envelope: zero heading alignment and full immobilization
-        if dist_xy <= dist_tol:
-            if abs(e_theta) <= angle_tol:
-                v_cmd, w_cmd = 0.0, 0.0
-            else:
-                v_cmd = 0.0
-                w_cmd = -W_MAX if e_theta > 0.0 else W_MAX
 
         pos_window.append((elapsed, pos[0], pos[1], pos[2]))
         if len(pos_window) >= 20:
@@ -351,11 +326,13 @@ def run_gazebo_benchmark_run(
             d_moved_window = 0.0
             d_rot_window = 0.0
 
-        is_stopped_cmds = (abs(v_cmd) < 0.03 and abs(w_cmd) < 0.04)
-        is_stopped_motion = (len(pos_window) >= 20 and d_moved_window < 0.008 and d_rot_window < 0.02)
+        is_stopped_cmds = (abs(v_cmd) < 0.06 and abs(w_cmd) < 0.06)
+        is_stopped_motion = (len(pos_window) >= 20 and d_moved_window < 0.010 and d_rot_window < 0.03)
         is_stationary = is_stopped_cmds or is_stopped_motion
 
         in_dock_envelope = (dist_xy <= dist_tol and abs(e_theta) <= angle_tol)
+        if in_dock_envelope and is_stationary:
+            v_cmd, w_cmd = 0.0, 0.0
 
         if elapsed > 1.0 and in_dock_envelope and is_stationary:
             dwell_timer += dt
