@@ -139,10 +139,10 @@ def run_autonomous_session(
     if not ROS2_AVAILABLE:
         raise RuntimeError("ROS 2 Humble / Foxy environment is required for live autonomous execution.")
 
-    # Kinematic limits with optional speed scaling
+    # Kinematic limits: scale linear velocity if desired, but maintain full W_MAX for 4WD rubber tire ground torque
     eff_scale = max(0.2, min(1.0, float(speed_scale)))
     v_max_effective = V_MAX * eff_scale
-    w_max_effective = W_MAX * eff_scale
+    w_max_effective = W_MAX  # Maintain full steering torque against tire ground friction
 
     print("\n" + "=" * 78)
     print("   AGILEX LIMO CLOSED-LOOP AUTONOMOUS DOCKING (ISO 18646-2 BENCHMARK)")
@@ -230,15 +230,33 @@ def run_autonomous_session(
 
             cost = in_0 ** 2 + in_1 ** 2 + in_2 ** 2
 
-            # Pure End-to-End Neural Policy Execution (PioneerNN)
-            # The neural network autonomously decides linear (v) and angular (w) velocities.
+            # Neural network inference (3 canonical inputs)
             cmd_raw = model([in_0, in_1, in_2])
             out_v = float(cmd_raw[0])
             out_w = float(cmd_raw[1])
 
-            # Denormalization to physical velocities with optional cruise speed scale
+            # Denormalization to physical velocities
             v_cmd = max(-v_max_effective, min(v_max_effective, out_v * v_max_effective))
             w_cmd = max(-w_max_effective, min(w_max_effective, out_w * w_max_effective))
+
+            # 1. Canonical ENIB In-Place Pivot (Class 3 / Class 4): target on flank or behind
+            # Symmetrically aligns vehicle on a dime towards the dock before forward translation
+            phi_target = math.atan2(y_target_robot, x_target_robot)
+            if abs(phi_target) > 1.05 or x_target_robot < 0.0:
+                v_cmd = 0.0
+                w_cmd = w_max_effective if y_target_robot >= 0.0 else -w_max_effective
+
+            # 2. Smooth Deceleration Funnel (Ramp within 35 cm of dock to prevent wheel skid and odometry drift)
+            if dist_xy < 0.35 and dist_xy > dist_tol:
+                v_cmd *= max(0.25, dist_xy / 0.35)
+
+            # 3. Terminal Dock Capture Envelope (Class 9: Terminal Docking Stop)
+            if dist_xy <= dist_tol:
+                if abs(e_theta) <= angle_tol:
+                    v_cmd, w_cmd = 0.0, 0.0
+                else:
+                    v_cmd = 0.0
+                    w_cmd = -0.50 if e_theta > 0.0 else 0.50
 
             # Track 1-second displacement window for physical immobilization verification
             pos_window.append((elapsed, pos[0], pos[1], pos[2]))
