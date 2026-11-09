@@ -61,7 +61,6 @@ limo-offline-learning/
 │   ├── dataset.csv                      # Canonical offline dataset (45,000 balanced samples)
 │   └── evaluation/                      # Evaluation telemetry & ISO benchmarks (git-ignored)
 ├── docs/
-│   ├── KINEMATICS_AND_NORMALIZATION_SPECIFICATION.md # Mathematical derivations & limits
 │   ├── docs/                            # Reference scientific papers & ISO standard guides
 │   └── images/                          # High-resolution benchmark and telemetry figures
 ├── models/
@@ -96,8 +95,6 @@ limo-offline-learning/
 ---
 
 ## 🔬 Kinematic Specifications & Normalization
-
-For complete mathematical derivations, stability proofs, and friction stopping distances, see [KINEMATICS_AND_NORMALIZATION_SPECIFICATION.md](docs/KINEMATICS_AND_NORMALIZATION_SPECIFICATION.md).
 
 > [!NOTE]
 > **Units of Measure & ROS REP-103 Standard Compliance**:
