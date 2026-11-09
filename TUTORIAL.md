@@ -142,7 +142,9 @@ cd ~/limo-offline-learning
 
 python3 src/evaluation/run_autonomous.py --real
 ```
-1. O script lerá a pose atual do `/odom` automaticamente e mostrará na tela:
+*(O script detecta automaticamente `/wheel/odom` ou `/odom`. Se quiser especificar manualmente: `--odom-topic /wheel/odom`).*
+
+1. O script lerá a pose atual da odometria automaticamente e mostrará na tela:
    ```text
    [Odometry] Current robot pose: x=1.84 m, y=0.92 m, theta=34.2°
    [Ready] Press Enter to start autonomous docking...

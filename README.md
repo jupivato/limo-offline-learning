@@ -173,7 +173,7 @@ Le terminal affiche les commandes de direction ci-dessous :
 
 ### 🧠 Terminal 3 : Contrôleur Autonome Hors-Ligne (PioneerNN)
 
-Ce terminal lance le réseau de neurones PioneerNN. Il lit automatiquement l'odométrie accumulée sur `/odom`, calcule la transformation dans le repère local du robot, et prend le contrôle exclusif de `/cmd_vel` pour ramener le robot au quai $(0, 0, 0)$.
+Ce terminal lance le réseau de neurones PioneerNN. Il lit automatiquement l'odométrie accumulée (avec détection automatique transparente de `/odom` ou `/wheel/odom`), calcule la transformation dans le repère local du robot, et prend le contrôle exclusif de `/cmd_vel` pour ramener le robot au quai $(0, 0, 0)$.
 
 1. Ouvrez un **Terminal 3** sur le robot :
 
@@ -183,6 +183,8 @@ source /opt/ros/foxy/setup.bash
 cd ~/limo-offline-learning
 python3 src/evaluation/run_autonomous.py --real
 ```
+
+*(Note : le script détecte automatiquement `/wheel/odom` et `/odom`. Vous pouvez aussi spécifier explicitement `--odom-topic /wheel/odom` si nécessaire).*
 
 *(Ou sous ROS 2 Humble : `source /opt/ros/humble/setup.bash && cd ~/limo-offline-learning && python3 src/evaluation/run_autonomous.py --real`)*
 

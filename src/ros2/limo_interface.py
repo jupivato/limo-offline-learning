@@ -44,13 +44,13 @@ class LimoROS2Interface(Node):
     - cleanup()
     """
 
-    def __init__(self, safety_limits: bool = True, odom_topic: str = "/odom", cmd_vel_topic: str = "/cmd_vel"):
+    def __init__(self, safety_limits: bool = True, odom_topic: Optional[str] = None, cmd_vel_topic: str = "/cmd_vel"):
         """
         Initialise l'interface ROS 2 du LIMO.
 
         Args:
             safety_limits (bool): Active le plafonnement strict des vitesses pour le robot réel.
-            odom_topic (str): Nom du topic d'odométrie (défaut: /odom).
+            odom_topic (Optional[str]): Nom du topic d'odométrie (None/'auto' écoute /odom et /wheel/odom).
             cmd_vel_topic (str): Nom du topic de commande (défaut: /cmd_vel).
         """
         if not ROS2_AVAILABLE:
@@ -60,6 +60,7 @@ class LimoROS2Interface(Node):
         self.safety_limits = safety_limits
         self.odom_topic = odom_topic
         self.cmd_vel_topic = cmd_vel_topic
+        self._active_odom_topic: Optional[str] = None
 
         # Pose interne du robot [x, y, theta] et décalage d'origine
         self._position = [0.0, 0.0, 0.0]
@@ -71,10 +72,23 @@ class LimoROS2Interface(Node):
         self._lock = threading.Lock()
         self._odom_received = False
 
-        # Souscription et publication ROS 2
-        self._odom_sub = self.create_subscription(
-            Odometry, self.odom_topic, self._odom_callback, 10
-        )
+        # Souscription aux topics d'odométrie
+        self._odom_subs = []
+        if self.odom_topic and self.odom_topic != "auto":
+            sub = self.create_subscription(
+                Odometry, self.odom_topic, lambda msg, t=self.odom_topic: self._odom_callback(msg, t), 10
+            )
+            self._odom_subs.append(sub)
+            print(f"[LimoROS2Interface] Souscription au topic d'odométrie : {self.odom_topic}")
+        else:
+            # Auto-découverte : écoute simultanée de /odom et /wheel/odom
+            for candidate in ["/odom", "/wheel/odom"]:
+                sub = self.create_subscription(
+                    Odometry, candidate, lambda msg, t=candidate: self._odom_callback(msg, t), 10
+                )
+                self._odom_subs.append(sub)
+            print(f"[LimoROS2Interface] Détection automatique de l'odométrie (/odom et /wheel/odom)...")
+
         self._cmd_pub = self.create_publisher(Twist, self.cmd_vel_topic, 10)
 
         # Thread d'écoute asynchrone pour le spin ROS 2
@@ -82,17 +96,30 @@ class LimoROS2Interface(Node):
         self._spin_thread.start()
 
         # Attente de la première trame d'odométrie
-        print(f"[LimoROS2Interface] En attente du premier message sur {self.odom_topic}...")
+        wait_start = time.time()
         while not self._odom_received and rclpy.ok():
             time.sleep(0.05)
-        print(f"[LimoROS2Interface] Première odométrie reçue avec succès.")
+            if time.time() - wait_start > 5.0:
+                topics_str = self.odom_topic if (self.odom_topic and self.odom_topic != "auto") else "/odom, /wheel/odom"
+                print(f"[LimoROS2Interface] En attente du flux d'odométrie sur {topics_str}...")
+                wait_start = time.time()
 
-    def _odom_callback(self, msg: Odometry) -> None:
+        print(f"[LimoROS2Interface] Première odométrie reçue avec succès sur '{self.odom_topic}'.")
+
+    def _odom_callback(self, msg: Odometry, topic_name: str = "/odom") -> None:
         """
         Callback de traitement des messages Odometry.
         Extrait la position cartésienne et convertit le quaternion en orientation lacet (yaw).
         Applique la matrice de rotation 2D SO(2) par rapport à l'angle initial d'étalonnage.
         """
+        with self._lock:
+            if self._active_odom_topic is None:
+                self._active_odom_topic = topic_name
+                self.odom_topic = topic_name
+                print(f"[LimoROS2Interface] Flux d'odométrie verrouillé sur le topic : {topic_name}")
+            elif self._active_odom_topic != topic_name:
+                return  # Ignorer les messages de l'autre topic une fois le premier verrouillé
+
         pos_x = float(msg.pose.pose.position.x)
         pos_y = float(msg.pose.pose.position.y)
         quat = msg.pose.pose.orientation

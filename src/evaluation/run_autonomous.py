@@ -111,7 +111,9 @@ def run_autonomous_session(
     dist_tol: float = DEFAULT_DIST_TOL,
     angle_tol: float = DEFAULT_ANGLE_TOL,
     dwell_time_required: float = DEFAULT_DWELL_TIME,
-    output_dir: str = "data/evaluation"
+    output_dir: str = "data/evaluation",
+    odom_topic: Optional[str] = None,
+    cmd_vel_topic: str = "/cmd_vel"
 ) -> bool:
     """
     Orchestrates a closed-loop autonomous docking trial with stationary dwell verification.
@@ -126,6 +128,8 @@ def run_autonomous_session(
         angle_tol (float): Heading tolerance at dock (rad).
         dwell_time_required (float): Required continuous stationary dwell duration (s).
         output_dir (str): Root directory for telemetry logs and trajectory plots.
+        odom_topic (Optional[str]): Odometry topic name (default: auto-detects /odom or /wheel/odom).
+        cmd_vel_topic (str): Velocity command topic name (default: /cmd_vel).
 
     Returns:
         bool: True if stable docking with verified dwell was achieved, False otherwise.
@@ -152,7 +156,7 @@ def run_autonomous_session(
 
     # 2. Initialize ROS 2 Node & Hardware / Gazebo Interface
     rclpy.init()
-    robot = LimoROS2Interface(safety_limits=is_real)
+    robot = LimoROS2Interface(safety_limits=is_real, odom_topic=odom_topic, cmd_vel_topic=cmd_vel_topic)
     logger = DataLogger()
 
     # Initial repositioning / teleportation
@@ -372,6 +376,8 @@ if __name__ == "__main__":
     parser.add_argument("--angle-tol", type=float, default=DEFAULT_ANGLE_TOL, help=f"Docking orientation tolerance (default: {DEFAULT_ANGLE_TOL}rad)")
     parser.add_argument("--dwell-time", type=float, default=DEFAULT_DWELL_TIME, help=f"Required stationary dwell time at dock (default: {DEFAULT_DWELL_TIME}s)")
     parser.add_argument("--outdir", type=str, default="data/evaluation", help="Destination telemetry directory")
+    parser.add_argument("--odom-topic", type=str, default=None, help="Odometry topic name (default: auto-detects /odom or /wheel/odom)")
+    parser.add_argument("--cmd-vel-topic", type=str, default="/cmd_vel", help="Command velocity topic name (default: /cmd_vel)")
     args = parser.parse_args()
 
     run_autonomous_session(
@@ -383,5 +389,7 @@ if __name__ == "__main__":
         dist_tol=args.dist_tol,
         angle_tol=args.angle_tol,
         dwell_time_required=args.dwell_time,
-        output_dir=args.outdir
+        output_dir=args.outdir,
+        odom_topic=args.odom_topic,
+        cmd_vel_topic=args.cmd_vel_topic
     )
