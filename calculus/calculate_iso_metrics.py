@@ -228,6 +228,12 @@ def evaluate_directory(input_dir: str = "data/evaluation", output_dir: str = "ca
         input_dir = os.path.join(input_dir, "data")
         csv_files = glob.glob(os.path.join(input_dir, "*.csv"))
 
+    # Exclude generated metric summaries and aggregated files to process trial runs only
+    csv_files = [
+        c for c in csv_files
+        if not any(k in os.path.basename(c).lower() for k in ["iso", "summary", "trial", "metrics"])
+    ]
+
     if not csv_files:
         print(f"[calculate_iso_metrics] No CSV files found in: {input_dir}")
         return
