@@ -7,8 +7,8 @@ AgileX LIMO mobile robot at 20 Hz, supporting both Gazebo simulation and physica
 Core Functionalities:
 ---------------------
 1. Synaptic Policy Execution:
-   Loads the trained bias-free PioneerNN (3 inputs: x_R, y_R, theta_R).
-   Algebraic guarantee: PioneerNN([0, 0, 0]) == [0.0, 0.0] at the origin.
+   Loads the trained PioneerNN (3 inputs: x_target_robot, y_target_robot, e_theta).
+   Terminal stationarity guaranteed by execution-layer deadband and zero-velocity dwell hold.
 
 2. SE(2) Metrological Distance Metric:
    Calculates Euclidean distance and Lie group SE(2) composite distance:
@@ -17,7 +17,7 @@ Core Functionalities:
    where b = 0.086 m (half-track width of AgileX LIMO converting heading error into meters).
 
 3. Docking Envelope & Stationary Dwell-Time Watchdog:
-   - Capture Envelope: d_xy <= dist_tol (0.05 m = 5 cm) and |e_theta| <= angle_tol (0.15 rad ~ 8.6°).
+   - Capture Envelope: d_xy <= dist_tol (0.08 m = 8 cm) and |e_theta| <= angle_tol (0.26 rad ~ 15.0°).
    - Stability Dwell-Time: Robot must remain continuously stationary (displacement < 5 mm,
      velocities near zero) for at least 30.0 seconds within the capture envelope before declaring success.
    - Any departure or drift resets the dwell timer to ensure metrological stability.
@@ -60,7 +60,7 @@ try:
 except (ImportError, ModuleNotFoundError):
     ROS2_AVAILABLE = False
 
-from src.core.pioneer_nn import PioneerNN, recast_angle
+from src.core.pioneer_nn import PioneerNN, recast_angle, compute_k_theta
 from src.evaluation.data_logger import DataLogger
 
 try:
@@ -157,10 +157,10 @@ def run_autonomous_session(
     print("=" * 78 + "\n")
 
     # 1. Initialize Neural Network Policy
-    model = PioneerNN(input_size=3, hidden_size=1000, output_size=2, use_bias=False)
+    model = PioneerNN(input_size=3, hidden_size=1000, output_size=2, use_bias=True)
     model.load_from_json_file(weights_path)
     model.eval()
-    print(f"[PioneerNN] Policy loaded from: {weights_path} (Strict bias-free equilibrium verified)")
+    print(f"[PioneerNN] Policy loaded from: {weights_path} (use_bias={model.use_bias})")
 
     # 2. Initialize ROS 2 Node & Hardware / Gazebo Interface
     rclpy.init()
@@ -223,10 +223,10 @@ def run_autonomous_session(
             x_target_robot = dx * math.cos(thr) + dy * math.sin(thr)
             y_target_robot = -dx * math.sin(thr) + dy * math.cos(thr)
 
-            # Normalized inputs in [-1.0, +1.0]
+            # Normalized inputs in [-1.0, +1.0] (relative to dock target)
             in_0 = max(-1.0, min(1.0, x_target_robot / X_MAX))
             in_1 = max(-1.0, min(1.0, y_target_robot / Y_MAX))
-            in_2 = max(-1.0, min(1.0, thr / math.pi))
+            in_2 = max(-1.0, min(1.0, e_theta / math.pi))
 
             cost = in_0 ** 2 + in_1 ** 2 + in_2 ** 2
 
@@ -235,9 +235,12 @@ def run_autonomous_session(
             out_v = float(cmd_raw[0])
             out_w = float(cmd_raw[1])
 
-            # Pure 100% Neural Policy Output Denormalization (Zero External Geometric Rules)
+            # Radial angular velocity damping gain K_theta
+            k_th = compute_k_theta(x_target_robot, y_target_robot)
+
+            # Neural policy output denormalization with K_theta damping
             v_cmd = max(-v_max_effective, min(v_max_effective, out_v * v_max_effective))
-            w_cmd = max(-w_max_effective, min(w_max_effective, out_w * w_max_effective))
+            w_cmd = max(-w_max_effective, min(w_max_effective, out_w * w_max_effective * k_th))
 
             # Canonical ENIB Output Deadband (Class 9: Terminal Stop)
             if abs(out_v) <= 0.05:

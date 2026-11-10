@@ -1,10 +1,10 @@
 """
-Enregistreur de Télémétrie et Métriques (DataLogger)
-===================================================
-Enregistre la trajectoire, les erreurs, les consignes et les métriques
-à chaque itération de 20 Hz. Compatible avec le moteur de calcul ISO 18646-2.
+Telemetry and Metrics Logger (DataLogger)
+=========================================
+Records trajectory, errors, velocity commands, and loss criteria
+at each 20 Hz iteration. Fully compliant with ISO 18646-2 metrology processing.
 
-Projet : LIMO Offline Learning (CERV / ENIB)
+Project: LIMO Offline Learning (CERV / ENIB)
 """
 
 import os
@@ -15,12 +15,12 @@ import math
 from typing import List, Dict, Any, Optional
 
 
-LIMO_HALF_TRACK = 0.086  # Demi-voie : 86 mm
+LIMO_HALF_TRACK = 0.086  # Characteristic half-track: 86 mm
 
 
 class DataLogger:
     """
-    Gestionnaire d'enregistrement des données de télémétrie en temps réel.
+    Real-time telemetry and state logger for mobile robot navigation.
     """
 
     def __init__(self):
@@ -36,14 +36,14 @@ class DataLogger:
         cost: float = 0.0
     ) -> None:
         """
-        Enregistre un échantillon à l'instant courant.
+        Logs a telemetry sample at the current time step.
 
         Args:
-            position (List[float]): Pose courante [x, y, theta].
-            target (List[float]): Pose cible [tx, ty, ttheta].
-            command (List[float]): Commande appliquée [v_lin, v_ang].
-            grad (List[float], optional): Gradient [grad_0, grad_1] (défaut [0.0, 0.0]).
-            cost (float): Valeur du critère de coût à l'instant courant.
+            position (List[float]): Current pose [x, y, theta].
+            target (List[float]): Target pose [tx, ty, ttheta].
+            command (List[float]): Applied velocity command [v_lin, v_ang].
+            grad (List[float], optional): Gradient [grad_0, grad_1] (default [0.0, 0.0]).
+            cost (float): Scalar cost value at the current step.
         """
         if self._start_time is None:
             self._start_time = time.time()
@@ -56,7 +56,7 @@ class DataLogger:
         tx, ty, ttheta = target
         v_lin, v_ang = command[0], command[1]
 
-        # Erreur angulaire ramenée dans (-pi, pi]
+        # Angular error normalized into (-pi, pi]
         e_theta_raw = (theta - ttheta) % (2.0 * math.pi)
         if e_theta_raw > math.pi:
             e_theta_raw -= 2.0 * math.pi
@@ -80,13 +80,13 @@ class DataLogger:
 
     def save(self, filename: str) -> None:
         """
-        Exporte les données enregistrées dans un fichier CSV.
+        Exports recorded telemetry to a CSV file.
 
         Args:
-            filename (str): Chemin du fichier CSV de sortie.
+            filename (str): Destination CSV filepath.
         """
         if not self._rows:
-            print("[DataLogger] Aucune donnée à enregistrer.")
+            print("[DataLogger] No telemetry data to save.")
             return
 
         os.makedirs(os.path.dirname(os.path.abspath(filename)), exist_ok=True)
@@ -95,10 +95,10 @@ class DataLogger:
             writer.writeheader()
             writer.writerows(self._rows)
 
-        print(f"[DataLogger] Télémétrie sauvegardée dans : {filename} ({len(self._rows)} itérations)")
+        print(f"[DataLogger] Telemetry successfully saved to: {filename} ({len(self._rows)} samples)")
 
     def save_plot(self, png_path: str, show: bool = False) -> None:
-        """Génère la planche graphique session 3x3 identique à celle d'APP-Limo-ros2."""
+        """Generates a 3x3 session diagnostic panel identical to APP-Limo-ros2."""
         if not self._rows:
             return
         try:
@@ -109,7 +109,7 @@ class DataLogger:
             import matplotlib.pyplot as plt
             from matplotlib.gridspec import GridSpec
         except Exception:
-            print("[DataLogger] matplotlib n'est pas disponible — génération graphique ignorée.")
+            print("[DataLogger] matplotlib is not available — skipping plot generation.")
             return
 
         t = [r["timestamp"] for r in self._rows]
@@ -132,29 +132,29 @@ class DataLogger:
         gs = GridSpec(3, 3, figure=fig)
 
         ax = fig.add_subplot(gs[0:2, 0])
-        ax.plot(x, y, "b-", linewidth=1.5, label="trajectoire")
-        ax.plot(x[0], y[0], "go", markersize=8, label="départ")
-        ax.plot(x[-1], y[-1], "s", color="#e74c3c", markersize=7, label="arrivée")
-        ax.plot(0, 0, "r*", markersize=14, label="cible (0,0)")
+        ax.plot(x, y, "b-", linewidth=1.5, label="trajectory")
+        ax.plot(x[0], y[0], "go", markersize=8, label="start")
+        ax.plot(x[-1], y[-1], "s", color="#e74c3c", markersize=7, label="finish")
+        ax.plot(0, 0, "r*", markersize=14, label="target (0,0)")
 
-        # Flèches d'orientation dynamique adaptées à l'échelle de l'arène
+        # Dynamic heading arrows scaled to arena bounding box
         span_x = max(max(x) - min(x), 1.0)
         span_y = max(max(y) - min(y), 1.0)
         arr_len = max(0.25, max(span_x, span_y) * 0.08)
 
-        # Flèche d'orientation initiale (cap départ)
+        # Initial heading arrow
         ax.annotate("", xy=(x[0] + arr_len * math.cos(th[0]), y[0] + arr_len * math.sin(th[0])), xytext=(x[0], y[0]),
                     arrowprops=dict(arrowstyle="-|>", color="#27ae60", lw=2.8, mutation_scale=18))
 
-        # Flèche d'orientation finale (cap arrivée)
+        # Final heading arrow
         ax.annotate("", xy=(x[-1] + arr_len * math.cos(th[-1]), y[-1] + arr_len * math.sin(th[-1])), xytext=(x[-1], y[-1]),
                     arrowprops=dict(arrowstyle="-|>", color="#e74c3c", lw=2.8, mutation_scale=18))
 
-        # Flèche d'orientation désirée à la cible (theta=0)
+        # Target desired heading arrow (theta=0)
         ax.annotate("", xy=(arr_len, 0.0), xytext=(0.0, 0.0),
                     arrowprops=dict(arrowstyle="-|>", color="#f39c12", lw=2.2, mutation_scale=16))
 
-        ax.set_title("Trajectoire XY & Caps (Départ/Arrivée)")
+        ax.set_title("XY Trajectory & Headings (Start/Finish)")
         ax.set_xlabel("x (m)")
         ax.set_ylabel("y (m)")
         ax.legend(loc="best", fontsize=8.5)
@@ -163,7 +163,7 @@ class DataLogger:
 
         ax2 = fig.add_subplot(gs[0, 1])
         ax2.plot(t, co, "r-", linewidth=1)
-        ax2.set_title("Coût")
+        ax2.set_title("Cost")
         ax2.set_xlabel("t (s)")
         ax2.grid(True)
 
@@ -171,7 +171,7 @@ class DataLogger:
         ax3.plot(t, ex, label="e_x")
         ax3.plot(t, ey, label="e_y")
         ax3.plot(t, et, label="e_θ")
-        ax3.set_title("Erreurs")
+        ax3.set_title("Errors")
         ax3.set_xlabel("t (s)")
         ax3.legend()
         ax3.grid(True)
@@ -179,15 +179,15 @@ class DataLogger:
         ax4 = fig.add_subplot(gs[1, 1])
         ax4.plot(t, vl, label="v_lin")
         ax4.plot(t, va, label="v_ang")
-        ax4.set_title("Vitesses robot")
+        ax4.set_title("Robot Velocities")
         ax4.set_xlabel("t (s)")
         ax4.legend()
         ax4.grid(True)
 
         ax5 = fig.add_subplot(gs[1, 2])
-        ax5.plot(t, wl, label="gauche")
-        ax5.plot(t, wr, label="droite")
-        ax5.set_title("Vitesses roues (m/s)")
+        ax5.plot(t, wl, label="left")
+        ax5.plot(t, wr, label="right")
+        ax5.set_title("Wheel Speeds (m/s)")
         ax5.set_xlabel("t (s)")
         ax5.legend()
         ax5.grid(True)
@@ -195,9 +195,9 @@ class DataLogger:
         ax6 = fig.add_subplot(gs[2, 1])
         dists = [math.hypot(xi, yi) for xi, yi in zip(x, y)]
         ax6.plot(t, dists, color="#8e44ad", linewidth=1.5, label="distance (m)")
-        ax6.axhline(y=0.20, color="#e67e22", linestyle="--", label="freinage (0.2m)")
-        ax6.axhline(y=0.05, color="#27ae60", linestyle="-.", label="arrêt (0.05m)")
-        ax6.set_title("Distance à la Cible (m)")
+        ax6.axhline(y=0.40, color="#e67e22", linestyle="--", label="braking (0.40m)")
+        ax6.axhline(y=0.08, color="#27ae60", linestyle="-.", label="dock stop (0.08m)")
+        ax6.set_title("Distance to Target (m)")
         ax6.set_xlabel("t (s)")
         ax6.legend(fontsize=8)
         ax6.grid(True)
@@ -217,9 +217,9 @@ class DataLogger:
         if show:
             plt.show()
         plt.close(fig)
-        print(f"[DataLogger] Graphique sauvegardé dans : {png_path}")
+        print(f"[DataLogger] Session plot saved to: {png_path}")
 
     def reset(self) -> None:
-        """Réinitialise les accumulateurs de télémétrie."""
+        """Resets telemetry accumulators."""
         self._start_time = None
         self._rows = []

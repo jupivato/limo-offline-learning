@@ -1,5 +1,5 @@
 """
-Module ros2 : interface de communication et de commande pour le robot LIMO.
+ROS 2 hardware and simulation interface module for AgileX LIMO mobile robot.
 """
 
 from src.ros2.limo_interface import LimoROS2Interface

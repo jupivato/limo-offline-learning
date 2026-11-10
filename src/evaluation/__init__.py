@@ -1,5 +1,5 @@
 """
-Module evaluation : navigation autonome en boucle fermée et enregistrement de télémétrie.
+Closed-loop autonomous evaluation, batch benchmarking, and telemetry logging module.
 """
 
 from src.evaluation.data_logger import DataLogger

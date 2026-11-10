@@ -74,8 +74,8 @@ NUM_ANGLES = 24                # Angular resolution: 24 equidistant headings (15
 # Precision deadbands for discrete maneuver classification
 STEER_DEADBAND = 0.15          # Heading deadband for pure forward driving (~8.6°)
 REVERSE_DEADBAND = 0.15        # Heading deadband for pure reverse driving (~8.6°)
-D_STOP = 0.060                 # Physical dock capture radius for terminal stop (6.0 cm)
-D_STOP_ANGLE_TOL = 0.100       # Heading alignment tolerance for terminal stop (~5.7°)
+D_STOP = 0.080                 # Physical dock capture radius for terminal stop (8.0 cm)
+D_STOP_ANGLE_TOL = 0.150       # Heading alignment tolerance for terminal stop (~8.6°)
 MAX_PIVOT_PHI = 0.50           # Bearing threshold triggering in-place pivot (~28.6°, prevents wide turning circles)
 D_BRAKE = 0.40                 # Deceleration funnel threshold distance for smooth approach (40.0 cm)
 
@@ -273,12 +273,12 @@ def generate_balanced_dataset(
                 raw_samples_by_class[m_id].append([x, y, th, v, w])
 
     # --------------------------------------------------------------------------
-    # 2. High-Density Terminal Docking Sub-Grid (|x|, |y| <= 0.06m, step 2.0mm, 64 angles)
+    # 2. High-Density Terminal Docking Sub-Grid (|x|, |y| <= 0.08m, step 2.0mm, 64 angles)
     # --------------------------------------------------------------------------
     dock_step = 0.0020
-    n_dock = int(round(0.12 / dock_step))
-    dock_xs = [round(-0.06 + i * dock_step, 4) for i in range(n_dock + 1)]
-    dock_ys = [round(-0.06 + i * dock_step, 4) for i in range(n_dock + 1)]
+    n_dock = int(round(0.16 / dock_step))
+    dock_xs = [round(-0.08 + i * dock_step, 4) for i in range(n_dock + 1)]
+    dock_ys = [round(-0.08 + i * dock_step, 4) for i in range(n_dock + 1)]
     dock_thetas = [round(-math.pi + i * (2.0 * math.pi / 64), 4) for i in range(65)]
 
     for x in dock_xs:

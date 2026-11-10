@@ -33,24 +33,26 @@ def get_compass_label(deg: float) -> str:
     deg_norm = (deg + 180.0) % 360.0 - 180.0  # normalize into [-180, +180]
     
     if -15.0 <= deg_norm <= 15.0:
-        return "⬆️  Frente (0°)"
+        return "⬆️  Forward (0°)"
     elif 15.0 < deg_norm < 75.0:
-        return "↖️  Frente-Esquerda"
+        return "↖️  Forward-Left"
     elif 75.0 <= deg_norm <= 105.0:
-        return "⬅️  Esquerda (+90°)"
+        return "⬅️  Left (+90°)"
     elif 105.0 < deg_norm < 165.0:
-        return "↙️  Trás-Esquerda"
+        return "↙️  Backward-Left"
     elif deg_norm >= 165.0 or deg_norm <= -165.0:
-        return "⬇️  Para Trás (±180°)"
+        return "⬇️  Backward (±180°)"
     elif -165.0 < deg_norm < -105.0:
-        return "↘️  Trás-Direita"
+        return "↘️  Backward-Right"
     elif -105.0 <= deg_norm <= -75.0:
-        return "➡️  Direita (-90°)"
+        return "➡️  Right (-90°)"
     else:  # -75.0 < deg_norm < -15.0
-        return "↗️  Frente-Direita"
+        return "↗️  Forward-Right"
 
 
 class PoseMonitor(Node):
+    """Real-time console visualizer for LIMO odometric pose and compass heading."""
+
     def __init__(self, topic: str | None = None):
         super().__init__("limo_pose_monitor")
         self.active_topic = topic
@@ -58,18 +60,18 @@ class PoseMonitor(Node):
 
         if topic:
             self.create_subscription(Odometry, topic, lambda msg: self.cb(msg, topic), 10)
-            print(f"[PoseMonitor] Escutando tópico: {topic}")
+            print(f"[PoseMonitor] Listening to topic: {topic}")
         else:
-            print("[PoseMonitor] Buscando fluxo de odometria em /wheel/odom e /odom...")
+            print("[PoseMonitor] Searching for odometry stream on /wheel/odom and /odom...")
             for candidate in ["/wheel/odom", "/odom"]:
                 self.create_subscription(Odometry, candidate, lambda msg, t=candidate: self.cb(msg, t), 10)
 
     def cb(self, msg: Odometry, topic_name: str) -> None:
         if self.active_topic is None:
             self.active_topic = topic_name
-            print(f"[PoseMonitor] Bloqueado com sucesso no tópico: {topic_name}\n")
+            print(f"[PoseMonitor] Successfully locked onto topic: {topic_name}\n")
             print("-" * 75)
-            print(" POSIÇÃO DO ROBÔ EM TEMPO REAL (Atualização contínua)")
+            print(" REAL-TIME ROBOT POSE (Continuous update)")
             print("-" * 75)
         elif self.active_topic != topic_name:
             return
@@ -89,7 +91,7 @@ class PoseMonitor(Node):
         # Print on a single refreshing line
         output = (
             f"\r📍 X: {x:+6.2f} m | Y: {y:+6.2f} m | Dist: {dist:5.2f} m | "
-            f"Ângulo: {yaw_deg:+6.1f}° [{compass:20s}]   "
+            f"Angle: {yaw_deg:+6.1f}° [{compass:20s}]   "
         )
         sys.stdout.write(output)
         sys.stdout.flush()
@@ -105,7 +107,7 @@ def main():
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
-        print("\n[PoseMonitor] Monitoramento finalizado pelo usuário.")
+        print("\n[PoseMonitor] Monitoring stopped by user.")
     finally:
         node.destroy_node()
         if rclpy.ok():

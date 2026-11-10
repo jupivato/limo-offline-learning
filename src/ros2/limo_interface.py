@@ -1,16 +1,16 @@
 """
-Interface Matérielle et Simulation ROS 2 pour AgileX LIMO
-=========================================================
-Gère la communication asynchrone avec le robot réel ou le simulateur Gazebo
-via les topics standard /odom et /cmd_vel.
+ROS 2 Hardware and Simulation Interface for AgileX LIMO
+========================================================
+Handles asynchronous communication with the physical robot or Gazebo simulator
+via standard /odom and /cmd_vel topics.
 
-Fonctionnalités :
-- Souscription au topic d'odométrie (/odom) à 20-50 Hz.
-- Conversion analytique quaternion -> lacet (yaw / theta).
-- Publication des consignes de vitesse (Twist) sur /cmd_vel avec limitation de sécurité.
-- Respect du chien de garde matériel (watchdog 500 ms) et arrêt sécurisé.
+Features:
+- Subscription to odometry topic (/odom, /wheel/odom) at 20-50 Hz.
+- Analytical quaternion -> yaw (theta) conversion.
+- Velocity command publication (Twist) on /cmd_vel with strict safety bounds.
+- Hardware watchdog compliance (500 ms) and emergency stop.
 
-Projet : LIMO Offline Learning (CERV / ENIB)
+Project: LIMO Offline Learning (CERV / ENIB)
 """
 
 from __future__ import annotations
@@ -28,16 +28,16 @@ try:
     ROS2_AVAILABLE = True
 except (ImportError, ModuleNotFoundError):
     ROS2_AVAILABLE = False
-    Node = object  # Remplacement pour environnement hors-ROS
+    Node = object  # Fallback for non-ROS environments
     Twist = object
     Odometry = object
 
 
 class LimoROS2Interface(Node):
     """
-    Interface ROS 2 isolée pour le robot mobile AgileX LIMO.
+    Isolated ROS 2 interface for the AgileX LIMO mobile robot.
     
-    Fournit un contrat strict de méthodes :
+    Provides a strict method contract:
     - get_position() -> [x, y, theta]
     - set_cmd_vel(v_lin, v_ang)
     - stop()
@@ -46,15 +46,15 @@ class LimoROS2Interface(Node):
 
     def __init__(self, safety_limits: bool = True, odom_topic: Optional[str] = None, cmd_vel_topic: str = "/cmd_vel"):
         """
-        Initialise l'interface ROS 2 du LIMO.
+        Initializes the LIMO ROS 2 interface.
 
         Args:
-            safety_limits (bool): Active le plafonnement strict des vitesses pour le robot réel.
-            odom_topic (Optional[str]): Nom du topic d'odométrie (None/'auto' écoute /odom et /wheel/odom).
-            cmd_vel_topic (str): Nom du topic de commande (défaut: /cmd_vel).
+            safety_limits (bool): Enables strict velocity clamping for the physical robot.
+            odom_topic (Optional[str]): Odometry topic name (None/'auto' listens to both /odom and /wheel/odom).
+            cmd_vel_topic (str): Velocity command topic name (default: /cmd_vel).
         """
         if not ROS2_AVAILABLE:
-            raise RuntimeError("Le module rclpy n'est pas disponible dans cet environnement Python.")
+            raise RuntimeError("The rclpy module is not available in this Python environment.")
 
         super().__init__("limo_offline_interface")
         self.safety_limits = safety_limits
@@ -62,7 +62,7 @@ class LimoROS2Interface(Node):
         self.cmd_vel_topic = cmd_vel_topic
         self._active_odom_topic: Optional[str] = None
 
-        # Pose interne du robot [x, y, theta] et décalage d'origine
+        # Internal robot pose [x, y, theta] and origin offsets
         self._position = [0.0, 0.0, 0.0]
         self._raw_position = [0.0, 0.0, 0.0]
         self._raw_origin = [0.0, 0.0, 0.0]
@@ -72,59 +72,59 @@ class LimoROS2Interface(Node):
         self._lock = threading.Lock()
         self._odom_received = False
 
-        # Souscription aux topics d'odométrie
+        # Odometry subscriptions
         self._odom_subs = []
         if self.odom_topic and self.odom_topic != "auto":
             sub = self.create_subscription(
                 Odometry, self.odom_topic, lambda msg, t=self.odom_topic: self._odom_callback(msg, t), 10
             )
             self._odom_subs.append(sub)
-            print(f"[LimoROS2Interface] Souscription au topic d'odométrie : {self.odom_topic}")
+            print(f"[LimoROS2Interface] Subscribed to odometry topic: {self.odom_topic}")
         else:
-            # Auto-découverte : écoute simultanée de /odom et /wheel/odom
+            # Auto-discovery: listen simultaneously to /odom and /wheel/odom
             for candidate in ["/odom", "/wheel/odom"]:
                 sub = self.create_subscription(
                     Odometry, candidate, lambda msg, t=candidate: self._odom_callback(msg, t), 10
                 )
                 self._odom_subs.append(sub)
-            print(f"[LimoROS2Interface] Détection automatique de l'odométrie (/odom et /wheel/odom)...")
+            print("[LimoROS2Interface] Auto-detecting odometry stream (/odom and /wheel/odom)...")
 
         self._cmd_pub = self.create_publisher(Twist, self.cmd_vel_topic, 10)
 
-        # Thread d'écoute asynchrone pour le spin ROS 2
+        # Asynchronous background thread for ROS 2 spinning
         self._spin_thread = threading.Thread(target=rclpy.spin, args=(self,), daemon=True)
         self._spin_thread.start()
 
-        # Attente de la première trame d'odométrie
+        # Await first odometry frame
         wait_start = time.time()
         while not self._odom_received and rclpy.ok():
             time.sleep(0.05)
             if time.time() - wait_start > 5.0:
                 topics_str = self.odom_topic if (self.odom_topic and self.odom_topic != "auto") else "/odom, /wheel/odom"
-                print(f"[LimoROS2Interface] En attente du flux d'odométrie sur {topics_str}...")
+                print(f"[LimoROS2Interface] Waiting for odometry stream on {topics_str}...")
                 wait_start = time.time()
 
-        print(f"[LimoROS2Interface] Première odométrie reçue avec succès sur '{self.odom_topic}'.")
+        print(f"[LimoROS2Interface] First odometry frame successfully received on '{self.odom_topic}'.")
 
     def _odom_callback(self, msg: Odometry, topic_name: str = "/odom") -> None:
         """
-        Callback de traitement des messages Odometry.
-        Extrait la position cartésienne et convertit le quaternion en orientation lacet (yaw).
-        Applique la matrice de rotation 2D SO(2) par rapport à l'angle initial d'étalonnage.
+        Odometry message processing callback.
+        Extracts Cartesian position and converts quaternion to yaw angle (theta).
+        Applies 2D SO(2) rotation matrix relative to initial calibration origin.
         """
         with self._lock:
             if self._active_odom_topic is None:
                 self._active_odom_topic = topic_name
                 self.odom_topic = topic_name
-                print(f"[LimoROS2Interface] Flux d'odométrie verrouillé sur le topic : {topic_name}")
+                print(f"[LimoROS2Interface] Odometry stream locked to topic: {topic_name}")
             elif self._active_odom_topic != topic_name:
-                return  # Ignorer les messages de l'autre topic une fois le premier verrouillé
+                return  # Ignore messages from alternate topic once primary is locked
 
         pos_x = float(msg.pose.pose.position.x)
         pos_y = float(msg.pose.pose.position.y)
         quat = msg.pose.pose.orientation
 
-        # Formule de conversion Quaternion -> Angle de lacet (Yaw / theta)
+        # Quaternion -> Yaw angle conversion formula
         siny_cosp = 2.0 * (quat.w * quat.z + quat.x * quat.y)
         cosy_cosp = 1.0 - 2.0 * (quat.y * quat.y + quat.z * quat.z)
         theta = math.atan2(siny_cosp, cosy_cosp)
@@ -149,8 +149,8 @@ class LimoROS2Interface(Node):
 
     def reset_pose(self, x0: float, y0: float, theta0: float) -> None:
         """
-        Calibre l'origine odométrique pour que le robot démarre exactement à (x0, y0, theta0).
-        Permet le repositionnement virtuel ou après téléportation dans Gazebo.
+        Calibrates the odometry origin so the robot starts exactly at (x0, y0, theta0).
+        Allows virtual repositioning or after Gazebo model teleportation.
         """
         with self._lock:
             raw_x, raw_y, raw_th = self._raw_position
@@ -160,19 +160,19 @@ class LimoROS2Interface(Node):
             self._offset_th = diff_th
             self._offset = [x0 - raw_x, y0 - raw_y, diff_th]
             self._position = [x0, y0, theta0]
-        print(f"[LimoROS2Interface] Pose réinitialisée à : x={x0:.2f} m, y={y0:.2f} m, theta={theta0:.2f} rad")
+        print(f"[LimoROS2Interface] Pose reset to: x={x0:.2f} m, y={y0:.2f} m, theta={theta0:.2f} rad")
 
     def teleport_gazebo(self, x0: float, y0: float, theta0: float, model_name: str = "limo_description") -> bool:
         """
-        Téléporte le modèle 3D du robot dans Gazebo et calibre l'odométrie sur (x0, y0, theta0).
+        Teleports the 3D robot model in Gazebo and calibrates odometry to (x0, y0, theta0).
         """
         import subprocess
-        # 0. Arrêt préalable strict des moteurs
+        # 0. Strict motor stop prior to teleportation
         self.stop()
         time.sleep(0.10)
 
         success = False
-        # 1. Tentative via l'utilitaire CLI gz model
+        # 1. Attempt via gz model CLI utility
         try:
             res = subprocess.run(
                 ["gz", "model", "-m", model_name, "-x", str(x0), "-y", str(y0), "-z", "0.05", "-Y", str(theta0)],
@@ -183,7 +183,7 @@ class LimoROS2Interface(Node):
         except Exception:
             pass
 
-        # 2. Tentative via le service ROS 2 /set_entity_state
+        # 2. Attempt via ROS 2 /set_entity_state service
         if not success:
             try:
                 qz = math.sin(theta0 / 2.0)
@@ -200,7 +200,7 @@ class LimoROS2Interface(Node):
             except Exception:
                 pass
 
-        # 3. Stabilisation physique et calibration odométrique
+        # 3. Physical settling and odometric calibration
         time.sleep(0.35)
         self.stop()
         self.reset_pose(x0, y0, theta0)
@@ -208,7 +208,7 @@ class LimoROS2Interface(Node):
 
     def get_position(self) -> List[float]:
         """
-        Renvoie la pose cartésienne et angulaire courante du robot [x, y, theta].
+        Returns the current Cartesian and angular pose of the robot [x, y, theta].
 
         Returns:
             List[float]: [x (m), y (m), theta (rad)]
@@ -218,14 +218,14 @@ class LimoROS2Interface(Node):
 
     def set_cmd_vel(self, v_lin: float, v_ang: float) -> None:
         """
-        Publie une consigne de vitesse linéaire et angulaire sur /cmd_vel.
+        Publishes linear and angular velocity commands on /cmd_vel.
 
         Args:
-            v_lin (float): Vitesse d'avance longitudinale en m/s.
-            v_ang (float): Vitesse de rotation en rad/s.
+            v_lin (float): Forward linear velocity in m/s.
+            v_ang (float): Rotational yaw rate in rad/s.
         """
         if self.safety_limits:
-            # Plafond de sécurité strict pour préserver le matériel
+            # Strict safety bounds to protect mobile hardware
             v_lin = max(-0.5, min(0.5, float(v_lin)))
             v_ang = max(-1.0, min(1.0, float(v_ang)))
 
@@ -235,11 +235,11 @@ class LimoROS2Interface(Node):
         self._cmd_pub.publish(msg)
 
     def stop(self) -> None:
-        """Envoie immédiatement une consigne d'arrêt d'urgence (vitesses nulles)."""
+        """Immediately sends an emergency stop command (zero velocities)."""
         self.set_cmd_vel(0.0, 0.0)
 
     def cleanup(self) -> None:
-        """Arrête le robot et détruit proprement le nœud ROS 2."""
+        """Stops the robot and cleanly destroys the ROS 2 node."""
         self.stop()
         time.sleep(0.05)
         self.destroy_node()

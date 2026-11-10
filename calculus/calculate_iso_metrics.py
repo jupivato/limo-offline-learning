@@ -1,18 +1,21 @@
 """
-Calcul des Caractéristiques de Pose Selon la Norme ISO 18646-2
-==============================================================
-Évalue métrologiquement les performances de navigation en boucle fermée :
-- Précision de position (Position accuracy, Ap)
-- Précision d'orientation (Orientation accuracy, Ao)
-- Répétabilité de position (Position repeatability, Rp)
-- Répétabilité d'orientation (Orientation repeatability, Ro)
-- Indices d'erreur temporelle intégrale : IAE, ISE, ITSE, ITAE
+ISO 18646-2 Mobile Robot Positioning Metrology Calculation Engine
+=================================================================
+Evaluates closed-loop autonomous navigation performance under ISO 18646-2:
+- Position Accuracy (Ap)
+- Orientation Accuracy (Ao)
+- Position Repeatability (Rp)
+- Orientation Repeatability (Ro)
+- Integral Time-Error Indices: IAE, ISE, ITSE, ITAE
 
-Application aux fichiers de télémétrie CSV générés par DataLogger.
-Génère des rapports structurés au format CSV et Excel (.xlsx).
+Processes telemetry CSV logs recorded by DataLogger.
+Generates structured metric summaries in CSV format.
 
-Projet : LIMO Offline Learning (CERV / ENIB)
+Project: LIMO Offline Learning (CERV / ENIB)
+Standards: ROS REP-103 & ISO 18646-2
 """
+
+from __future__ import annotations
 
 import os
 import glob
@@ -31,22 +34,27 @@ except ImportError:
 
 
 def recast_angle(angle_rad: float) -> float:
-    """Recaste un angle dans l'intervalle (-pi, +pi] selon l'ISO 18646-2."""
+    """Wraps an angle into the canonical interval (-pi, +pi] per ISO 18646-2."""
     return math.atan2(math.sin(angle_rad), math.cos(angle_rad))
 
 
-def compute_iso_18646_metrics(trials: List[Dict[str, float]], xc: float = 0.0, yc: float = 0.0, oc: float = 0.0) -> Optional[Dict[str, Any]]:
+def compute_iso_18646_metrics(
+    trials: List[Dict[str, float]],
+    xc: float = 0.0,
+    yc: float = 0.0,
+    oc: float = 0.0
+) -> Optional[Dict[str, Any]]:
     """
-    Calcule l'ensemble des métriques de la norme ISO 18646-2 pour un groupe d'essais.
+    Computes the complete set of ISO 18646-2 metrological characteristics for a group of trials.
 
     Args:
-        trials (List[Dict]): Liste des dictionnaires contenant xf, yf, thf (poses finales).
-        xc (float): Coordonnée X de la cible.
-        yc (float): Coordonnée Y de la cible.
-        oc (float): Orientation de consigne de la cible (rad).
+        trials (List[Dict]): List of dictionaries containing final poses: xf, yf, thf.
+        xc (float): Target X coordinate (m).
+        yc (float): Target Y coordinate (m).
+        oc (float): Nominal target orientation (rad).
 
     Returns:
-        Optional[Dict[str, Any]]: Métriques métrologiques ISO calculées.
+        Optional[Dict[str, Any]]: Computed ISO 18646-2 metrological indicators.
     """
     n = len(trials)
     if n == 0:
@@ -56,25 +64,25 @@ def compute_iso_18646_metrics(trials: List[Dict[str, float]], xc: float = 0.0, y
     ys = [t["yf"] for t in trials]
     ths = [t["thf"] for t in trials]
 
-    # 1. Barycentre des positions atteintes
+    # 1. Attained barycenter coordinates
     x_bar = sum(xs) / n
     y_bar = sum(ys) / n
 
-    # 2. Précision de position : Ap = sqrt((x_bar - xc)^2 + (y_bar - yc)^2)
+    # 2. Position Accuracy: Ap = sqrt((x_bar - xc)^2 + (y_bar - yc)^2)
     Ap = math.hypot(x_bar - xc, y_bar - yc)
 
-    # 3. Écarts d'orientation zj = recast(oj - oc) et moyenne z_bar
+    # 3. Orientation deviation zj = recast(oj - oc) and sample mean z_bar
     zs = [recast_angle(th - oc) for th in ths]
     z_bar = sum(zs) / n
     Ao_rad = z_bar
     Ao_deg = math.degrees(z_bar)
     Ao_abs_deg = abs(Ao_deg)
 
-    # 4. Écarts radiaux au barycentre : lj = sqrt((x_bar - xj)^2 + (y_bar - yj)^2)
+    # 4. Radial deviations from barycenter: lj = sqrt((x_bar - xj)^2 + (y_bar - yj)^2)
     ls = [math.hypot(x_bar - x, y_bar - y) for x, y in zip(xs, ys)]
     l_bar = sum(ls) / n
 
-    # Écart-types d'échantillon (degrés de liberté n - 1)
+    # Sample standard deviations (degrees of freedom n - 1)
     if n > 1:
         Sl = math.sqrt(sum((l - l_bar) ** 2 for l in ls) / (n - 1))
         So_rad = math.sqrt(sum((z - z_bar) ** 2 for z in zs) / (n - 1))
@@ -84,14 +92,14 @@ def compute_iso_18646_metrics(trials: List[Dict[str, float]], xc: float = 0.0, y
 
     So_deg = math.degrees(So_rad)
 
-    # 5. Répétabilité de position : Rp = l_bar + 3 * Sl
+    # 5. Position Repeatability: Rp = l_bar + 3 * Sl
     Rp = l_bar + 3.0 * Sl
 
-    # 6. Répétabilité d'orientation : Ro = 3 * So
+    # 6. Orientation Repeatability: Ro = 3 * So
     Ro_rad = 3.0 * So_rad
     Ro_deg = math.degrees(Ro_rad)
 
-    # Statistiques complémentaires
+    # Complementary statistical metrics
     pos_errors = [math.hypot(x - xc, y - yc) for x, y in zip(xs, ys)]
     mean_err_pos = sum(pos_errors) / n
     abs_zs_deg = [math.degrees(abs(z)) for z in zs]
@@ -118,7 +126,7 @@ def compute_iso_18646_metrics(trials: List[Dict[str, float]], xc: float = 0.0, y
 
 def compute_integral_errors(csv_path: str) -> Dict[str, float]:
     """
-    Calcule les critères intégraux IAE, ISE, ITSE, ITAE sur l'erreur de distance.
+    Computes integral error performance indices (IAE, ISE, ITSE, ITAE) on Euclidean distance error.
     """
     t_vals, errs = [], []
     with open(csv_path, "r", encoding="utf-8") as f:
@@ -161,7 +169,7 @@ def compute_integral_errors(csv_path: str) -> Dict[str, float]:
 
 
 def parse_final_pose(csv_path: str) -> Optional[Dict[str, Any]]:
-    """Lit la pose finale (dernière ligne) d'un fichier de télémétrie CSV."""
+    """Extracts the final resting pose (last row) from a telemetry CSV file."""
     last_row = None
     first_row = None
     with open(csv_path, "r", encoding="utf-8") as f:
@@ -208,11 +216,15 @@ def parse_final_pose(csv_path: str) -> Optional[Dict[str, Any]]:
 
 def evaluate_directory(input_dir: str = "data/evaluation", output_dir: str = "calculus") -> None:
     """
-    Scanne les CSV d'un dossier, calcule les métriques ISO et génère les rapports.
+    Scans telemetry CSV files in a directory, computes ISO metrics, and exports reports.
     """
     csv_files = glob.glob(os.path.join(input_dir, "*.csv"))
+    if not csv_files and os.path.isdir(os.path.join(input_dir, "data")):
+        input_dir = os.path.join(input_dir, "data")
+        csv_files = glob.glob(os.path.join(input_dir, "*.csv"))
+
     if not csv_files:
-        print(f"[calculate_iso_metrics] Aucun fichier CSV trouvé dans {input_dir}.")
+        print(f"[calculate_iso_metrics] No CSV files found in: {input_dir}")
         return
 
     trials = []
@@ -221,30 +233,29 @@ def evaluate_directory(input_dir: str = "data/evaluation", output_dir: str = "ca
     for path in sorted(csv_files):
         parsed = parse_final_pose(path)
         if parsed:
-            # Ajout des erreurs intégrales
             integ = compute_integral_errors(path)
             parsed.update(integ)
             trials.append(parsed)
             trials_by_quad[parsed["quadrant"]].append(parsed)
 
     if not trials:
-        print("[calculate_iso_metrics] Aucun essai valide extrait.")
+        print("[calculate_iso_metrics] No valid trials extracted.")
         return
 
     os.makedirs(output_dir, exist_ok=True)
 
-    # 1. Export du détail de chaque essai
+    # 1. Export detailed individual trial metrics
     trials_csv = os.path.join(output_dir, "all_trials_detailed.csv")
     with open(trials_csv, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=list(trials[0].keys()))
         writer.writeheader()
         writer.writerows(trials)
 
-    # 2. Métriques globales et par quadrant
+    # 2. Compute global and per-quadrant ISO 18646-2 metrics
     quad_summary = []
     print("\n" + "=" * 70)
-    print("--- RÉSULTATS MÉTHODOLOGIQUES ISO 18646-2 ---")
-    print(f"Nombre total d'essais analysés : {len(trials)}")
+    print("--- ISO 18646-2 METROLOGICAL EVALUATION RESULTS ---")
+    print(f"Total Evaluated Trials: {len(trials)}")
     print("=" * 70)
 
     for q in sorted(trials_by_quad.keys()):
@@ -255,9 +266,9 @@ def evaluate_directory(input_dir: str = "data/evaluation", output_dir: str = "ca
             quad_summary.append(metrics)
             print(
                 f"Quadrant {q} (n={metrics['n']}) | "
-                f"Précision Pos (Ap): {metrics['Ap']:.3f} m | "
-                f"Répétabilité Pos (Rp): {metrics['Rp']:.3f} m | "
-                f"Précision Angle (Ao): {metrics['Ao_abs_deg']:.2f}°"
+                f"Pos Accuracy (Ap): {metrics['Ap']:.3f} m | "
+                f"Pos Repeatability (Rp): {metrics['Rp']:.3f} m | "
+                f"Angle Accuracy (Ao): {metrics['Ao_abs_deg']:.2f}°"
             )
 
     global_metrics = compute_iso_18646_metrics(trials)
@@ -267,9 +278,9 @@ def evaluate_directory(input_dir: str = "data/evaluation", output_dir: str = "ca
         print("-" * 70)
         print(
             f"GLOBAL (n={global_metrics['n']})     | "
-            f"Précision Pos (Ap): {global_metrics['Ap']:.3f} m | "
-            f"Répétabilité Pos (Rp): {global_metrics['Rp']:.3f} m | "
-            f"Précision Angle (Ao): {global_metrics['Ao_abs_deg']:.2f}°"
+            f"Pos Accuracy (Ap): {global_metrics['Ap']:.3f} m | "
+            f"Pos Repeatability (Rp): {global_metrics['Rp']:.3f} m | "
+            f"Angle Accuracy (Ao): {global_metrics['Ao_abs_deg']:.2f}°"
         )
     print("=" * 70 + "\n")
 
@@ -279,13 +290,13 @@ def evaluate_directory(input_dir: str = "data/evaluation", output_dir: str = "ca
         writer.writeheader()
         writer.writerows(quad_summary)
 
-    print(f"[Succès] Rapports métrologiques sauvegardés dans {output_dir}/")
+    print(f"[Success] Metrological reports exported to: {output_dir}/")
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Moteur de calcul métrologique ISO 18646-2.")
-    parser.add_argument("--dir", type=str, default="data/evaluation", help="Dossier contenant les CSV")
-    parser.add_argument("--outdir", type=str, default="calculus", help="Dossier de sortie des métriques")
+    parser = argparse.ArgumentParser(description="ISO 18646-2 Metrological Calculation Engine.")
+    parser.add_argument("--dir", type=str, default="data/evaluation", help="Directory containing CSV logs")
+    parser.add_argument("--outdir", type=str, default="calculus", help="Output directory for reports")
     args = parser.parse_args()
 
     evaluate_directory(input_dir=args.dir, output_dir=args.outdir)

@@ -1,31 +1,33 @@
-# LIMO Offline Learning : Clonage Comportemental & Métrologie ISO 18646-2
+# LIMO Offline Learning : Apprentissage Hors-Ligne & Métrologie ISO 18646-2
 
-Contrôleur neuronal autonome en boucle fermée pour le robot mobile différentiel **AgileX LIMO**, implémentant le clonage comportemental hors-ligne (*Behavioral Cloning*), des repères centrés sur le robot, des actions ternaires discrètes, et une certification métrologique selon la norme **ISO 18646-2**.
+Contrôleur neuronal autonome en boucle fermée pour le robot mobile différentiel **AgileX LIMO**, implémentant l'apprentissage par imitation hors-ligne (*Behavioral Cloning*), un repère centré sur le robot, des commandes ternaires discrètes, et une certification métrologique rigoureuse selon la norme **ISO 18646-2**.
+
+L'objectif strict du contrôleur est de ramener le véhicule de n'importe quelle pose initiale $(x_0, y_0, \theta_0)$ dans l'arène vers **l'unique quai d'amarrage terminal situé exactement à $(0.0, 0.0, 0.0)$ avec une orientation alignée à $0^\circ$**.
 
 ---
 
-## 🏗️ Architecture du Système & Pipeline
+## Architecture du Système & Pipeline
 
 ```mermaid
 flowchart TD
-    subgraph Offline Dataset Generation [Génération du Dataset Hors-Ligne : src/generate_dataset.py]
-        Grid["Grille Spatiale : -5m ≤ x,y ≤ +5m (pas de 0.5m) & -π ≤ θ ≤ +π"]
-        Dock["Sous-grille d'Amarrage Terminal (|x|, |y| ≤ 0.6m, pas fins)"]
-        Rollouts["Déroulements en Boucle Fermée 20 Hz (Transitions Dynamiques)"]
+    subgraph Offline Dataset Generation [Génération du Jeu de Données : src/generate_dataset.py]
+        Grid["Grille Spatiale : -5m ≤ x,y ≤ +5m (pas de 0.20m) & -π ≤ θ ≤ +π"]
+        Dock["Sous-grille d'Amarrage Terminal (|x|, |y| ≤ 0.08m, pas fin)"]
+        Funnel["Entonnoir de Décélération Progressive (D_brake = 0.40m)"]
         Sym["Symétrie Bilatérale Sagittale (Biais Gauche/Droite Nul)"]
         Wrap["Raccordement Périodique aux Limites (Couture à ±π rad)"]
         Grid --> Sym
         Dock --> Sym
-        Rollouts --> Sym
+        Funnel --> Sym
         Sym --> Wrap
         Wrap --> CSV["data/dataset.csv\n(x_target_robot, y_target_robot, theta_robot, v_robot, w_robot)"]
     end
 
     subgraph Neural Network Training [Entraînement Neuronal : PioneerNN / src/train_offline.py]
-        NormIn["Normalisation des Entrées dans [-1, +1] :\n[x/5.0, y/5.0, θ/π]"]
-        MLP["Couche Cachée Dense (3 -> 1000) [Tanh]\nCouche de Sortie (1000 -> 2) [Tanh]\nuse_bias=False (Garantie Stricte MLP(0)=0)"]
-        NormOut["Normalisation des Cibles :\nv/0.50 ∈ {-1, 0, 1}, w/1.00 ∈ {-1, 0, 1}"]
-        Loss["Optimiseur SGD / AdamW + Perte MSE Pondérée"]
+        NormIn["Normalisation des Entrées dans [-1, +1] :\n[in_0 = x_r/5.0, in_1 = y_r/5.0, in_2 = e_θ/π]"]
+        MLP["Couche Cachée Dense (3 -> 1000) [Tanh]\nCouche de Sortie (1000 -> 2) [Tanh]\nuse_bias=True (Optimisation MSE < 0.08 & Ao)"]
+        NormOut["Normalisation des Cibles :\nv/0.50 ∈ [-1, +1] (Croisière & Freinage), w/1.00 ∈ {-1, 0, 1}"]
+        Loss["Optimiseur AdamW / SGD + Perte MSE Pondérée"]
         CSV --> NormIn --> MLP --> Loss
         CSV --> NormOut --> Loss
         Loss --> Weights["models/pioneer_model_weights.json\nmodels/supervised_w_torch_diff.json"]
@@ -33,86 +35,90 @@ flowchart TD
 
     subgraph Closed-Loop Autonomous Control [Contrôle Autonome en Boucle Fermée : ROS 2 / src/evaluation/run_autonomous.py]
         Odom["Pose Odométrique /odom : (x_R, y_R, θ_R)"]
-        Transform["Transformation Cible vers Repère Robot :\nx_tr = Δx·cos(θ) + Δy·sin(θ)\ny_tr = -Δx·sin(θ) + Δy·cos(θ)"]
+        Transform["Transformation Cible vers Repère Robot :\nx_tr = Δx·cos(θ) + Δy·sin(θ)\ny_tr = -Δx·sin(θ) + Δy·cos(θ)\ne_θ = wrap(θ_R - θ_cible)"]
         Inference["Inférence PioneerNN : cmd ∈ [-1, +1]²"]
-        Denorm["Dénormalisation :\nv = cmd[0] · 0.50 m/s\nω = cmd[1] · 1.00 rad/s"]
-        CmdVel["Consignes /cmd_vel (Châssis AgileX LIMO)"]
+        Damping["Amortissement Radial K_θ(x_R, y_R) ∈ [0.1, 1.0]"]
+        Denorm["Dénormalisation :\nv = cmd[0] · 0.50 m/s\nω = cmd[1] · 1.00 · K_θ rad/s"]
+        CmdVel["Consignes /cmd_vel (Base AgileX LIMO)"]
         
-        Odom --> Transform --> Inference --> Denorm --> CmdVel
+        Odom --> Transform --> Inference --> Damping --> Denorm --> CmdVel
     end
 
-    subgraph Metrology & Benchmarking [Métrologie & Benchmarking : calculus/calculate_iso_metrics.py]
+    subgraph Metrology & Benchmarking [Métrologie & Évaluation : calculus/calculate_iso_metrics.py]
         DataLogger["Enregistrement Télémétrique 20 Hz\n(x, y, θ, v, ω, timestamp)"]
-        ISOCalc["Calculs Norme ISO 18646-2 :\nAp (Précision de Position), Rp (Répétabilité)\nAo (Précision d'Orientation), Ro (Répétabilité)"]
+        ISOCalc["Calculs Norme ISO 18646-2 :\nAp (Précision de Position), Rp (Répétabilité)\nAo (Précision d'Orientation), Ro (Répétabilité)\nMaintien Stationnaire 30s (Dwell Time)"]
         CmdVel --> DataLogger --> ISOCalc
     end
 ```
 
 ---
 
-## 📂 Structure du Dépôt
+## Structure Essentielle du Répertoire
+
+Le projet a été rationalisé pour ne conserver que les scripts et modules strictement indispensables :
 
 ```text
 limo-offline-learning/
 ├── calculus/
 │   ├── __init__.py
-│   └── calculate_iso_metrics.py         # Moteur de calcul métrologique (ISO 18646-2)
+│   └── calculate_iso_metrics.py         # Moteur de calcul métrologique officiel (ISO 18646-2)
 ├── config/
-│   └── config.json                      # Limites cinématiques, bornes spatiales & normalisation
+│   └── config.json                      # Paramètres unifiés (limites cinématiques, D_stop, D_brake)
 ├── data/
-│   ├── dataset.csv                      # Dataset canonique hors-ligne (45 000 échantillons équilibrés)
-│   └── evaluation/                      # Télémétries d'essais & benchmarks ISO (ignoré par git)
+│   ├── dataset.csv                      # Dataset canonique (45 000 échantillons équilibrés, 9 classes)
+│   └── evaluation/                      # Télémétries, graphiques et benchmarks enregistrés
 ├── docs/
-│   ├── docs/                            # Articles scientifiques de référence & normes ISO
-│   └── images/                          # Graphiques haute résolution des benchmarks et trajectoires
+│   ├── docs/                            # Norme ISO 18646-2 et articles scientifiques de référence
+│   └── images/                          # Graphiques diagnostiques et matrices de confusion (300 DPI)
 ├── models/
 │   ├── pioneer_model_weights.json       # Poids neuronaux entraînés (format JSON universel)
-│   ├── supervised_w_torch_diff.json     # Miroir synchronisé des poids
-│   └── archive_old_trainings.zip        # Archives des sessions d'entraînement historiques
+│   ├── supervised_w_torch_diff.json     # Poids sérialisés synchronisés
+│   └── training_history.json            # Historique d'apprentissage (époques, perte, taux d'apprentissage)
 ├── src/
-│   ├── generate_dataset.py              # Générateur de dataset centré robot
-│   ├── train_offline.py                 # Pipeline d'entraînement supervisé hors-ligne (PioneerNN)
+│   ├── __init__.py
+│   ├── generate_dataset.py              # Générateur de dataset centré robot (45 000 échantillons)
+│   ├── train_offline.py                 # Pipeline d'apprentissage supervisé (PioneerNN, use_bias=True)
 │   ├── core/
 │   │   ├── __init__.py
-│   │   └── pioneer_nn.py                # Architecture PioneerNN (MLP sans biais, use_bias=False)
+│   │   └── pioneer_nn.py                # Architecture PioneerNN (MLP 3->1000->2, K_theta, replays)
 │   ├── ros2/
 │   │   ├── __init__.py
-│   │   └── limo_interface.py            # Interface ROS 2 (transformations odométriques & /cmd_vel)
+│   │   ├── limo_interface.py            # Interface matérielle ROS 2 (/odom, /wheel/odom et /cmd_vel)
+│   │   └── show_pose.py                 # Moniteur temps réel en console de la pose et du cap
 │   ├── evaluation/
 │   │   ├── __init__.py
-│   │   ├── data_logger.py               # Enregistreur télémétrique temps réel 20 Hz
-│   │   ├── run_autonomous.py            # Contrôleur autonome en boucle fermée (Robot Réel & Simu)
-│   │   └── run_batch_benchmark.py       # Banc d'évaluation multi-scénarios (ISO 18646-2)
+│   │   ├── data_logger.py               # Enregistreur télémétrique 20 Hz et planches 3x3
+│   │   ├── run_autonomous.py            # Navigation autonome unitaire en boucle fermée
+│   │   └── run_batch_benchmark.py       # Banc de test multi-scénarios (suite ISO 18646-2)
 │   └── visualization/
 │       ├── __init__.py
-│       ├── plot_curves.py               # Tracé des courbes de perte (Loss MSE Entraînement/Validation)
-│       ├── benchmark_visualizer.py      # Visualiseur de trajectoires & dashboards HTML interactifs
-│       ├── evaluate_xy_plane.py         # Cartographie du plan XY (champs de vecteurs carquois & heatmaps)
-│       └── plot_confusion_and_dataset_analysis.py # Matrices de confusion et distribution des manœuvres
-├── requirements.txt
-├── TUTORIAL.md                          # Tutoriel pas-à-pas complet pour débutants
-└── README.md
+│       ├── plot_curves.py               # Courbes de convergence (perte MSE d'entraînement et validation)
+│       ├── benchmark_visualizer.py      # Planches comparatives de trajectoires et dashboard HTML
+│       └── plot_confusion_and_dataset_analysis.py # Matrice de confusion et distribution des manœuvres
+├── requirements.txt                     # Dépendances Python
+├── TUTORIAL.md                          # Guide pas-à-pas détaillé pour exécuter le projet
+└── README.md                            # Documentation générale de référence
 ```
 
 ---
 
-## 🤖 Guide de Déploiement sur Robot Réel (AgileX LIMO)
+## Guide de Déploiement sur Robot Réel (AgileX LIMO)
 
-Pour exécuter le contrôleur autonome sur le robot physique dans la salle de test, le protocole standard s'articule autour de **3 terminaux distincts** (exécutés via SSH ou directement sur le terminal du robot).
+Sur le robot physique, la navigation s'exécute via **3 terminaux distincts** (connectés en SSH ou via écran/clavier local). L'odométrie accumulée est gérée de façon entièrement automatique : **aucune saisie manuelle de coordonnées n'est requise**.
 
-> [!IMPORTANT]
-> **Identification de la Plateforme Robotique :**
-> - **LIMO COBOT (Bras articulé, ex: `192.168.1.113`)** : Fonctionne sous **Ubuntu 20.04 + ROS 2 Foxy**. Son workspace matériel actif est `~/limo_ros2_ws`. Lors de l'ouverture du terminal, si l'invite `ros: noetic(1) foxy(2) ?` apparaît, choisissez **`2`**.
-> - **LIMO Standard (ex: `192.168.1.111`)** : Fonctionne sous **Ubuntu 22.04 + ROS 2 Humble**. Son workspace matériel est `~/agilex_ws`.
+> [IMPORTANT]
+> **Compatibilité des Plateformes Robotiques :**
+> - **LIMO COBOT (Bras articulé, ex : `192.168.1.113`)** : Fonctionne sous **Ubuntu 20.04 + ROS 2 Foxy**. Son espace de travail matériel actif est `~/limo_ros2_ws`. Si l'invite `ros: noetic(1) foxy(2) ?` apparaît à l'ouverture du terminal, tapez **`2`**.
+> - **LIMO Standard (ex : `192.168.1.111`)** : Fonctionne sous **Ubuntu 22.04 + ROS 2 Humble**. Son espace de travail est `~/agilex_ws` ou `~/ros2_ws`.
 
 ---
 
-### 💻 Terminal 1 : Driver Matériel de la Base Mobile
+### Terminal 1 : Driver Matériel de la Base Mobile
 
-Ce terminal initialise la communication matérielle avec le bus CAN des moteurs et la centrale inertielle (IMU). Il publie la pose odométrique sur `/odom` et écoute les commandes de vitesse sur `/cmd_vel`.
+Initialise la liaison série/CAN avec les actionneurs des roues et la centrale inertielle (IMU). Ce nœud initialise l'origine odométrique $(0, 0, 0)$ et publie sur `/odom` (ou `/wheel/odom`).
 
-1. Placez manuellement le robot éteint ou immobile **exactement à l'emplacement souhaité pour le quai d'amarrage (la cible $(0, 0, 0)$)**.
-2. Ouvrez le **Terminal 1** et lancez le driver :
+1. Placez le robot éteint ou immobile **exactement sur le quai d'amarrage souhaité (la cible $(0, 0, 0)$ avec un cap de $0^\circ$)**.
+2. Lancez le driver :
 
 ```bash
 # Pour LIMO COBOT (ROS 2 Foxy) :
@@ -121,165 +127,148 @@ source ~/limo_ros2_ws/install/setup.bash
 ros2 launch limo_base limo_base.launch.py
 ```
 
-*(Si vous utilisez un LIMO Standard sous ROS 2 Humble) :*
+*(Ou pour LIMO Standard sous ROS 2 Humble) :*
 ```bash
 source /opt/ros/humble/setup.bash
 source ~/agilex_ws/install/setup.bash
 ros2 launch limo_base limo_base.launch.py
 ```
 
-> [!NOTE]
-> **Ce terminal doit rester ouvert et actif en permanence.**
-> Des messages de statut indiquant la connexion au port série/CAN vont s'afficher en continu. C'est le comportement nominal normal.
+> [NOTE]
+> Ce terminal doit rester ouvert et en cours d'exécution pendant toute la durée des essais.
 
 ---
 
-### 🎮 Terminal 2 : Téléopération Manuelle au Clavier
+### Terminal 2 : Téléopération au Clavier
 
-Le nœud de téléopération au clavier permet d'éloigner manuellement le robot de sa cible $(0, 0, 0)$ et de le positionner à une pose de départ arbitraire (ex: à 2 mètres avec une orientation de $90^\circ$).
-
-1. Ouvrez un **Terminal 2** sur le robot :
+Permet d'éloigner manuellement le robot de la cible $(0, 0, 0)$ pour le placer sur une pose de départ arbitraire (ex : à 2 mètres avec une inclinaison angulaire).
 
 ```bash
-# Pour LIMO COBOT (ROS 2 Foxy) :
+# Sous ROS 2 Foxy :
 source /opt/ros/foxy/setup.bash
+ros2 run teleop_twist_keyboard teleop_twist_keyboard
+
+# Ou sous ROS 2 Humble :
+source /opt/ros/humble/setup.bash
 ros2 run teleop_twist_keyboard teleop_twist_keyboard
 ```
 
-*(Ou sous ROS 2 Humble : `source /opt/ros/humble/setup.bash && ros2 run teleop_twist_keyboard teleop_twist_keyboard`)*
+#### Touches Principales de Commande :
+- **`i`** : Avancer
+- **`,`** : Reculer
+- **`j`** : Rotation sur place vers la gauche (sens anti-horaire)
+- **`l`** : Rotation sur place vers la droite (sens horaire)
+- **`k`** : Arrêt d'urgence immédiat ($v=0, \omega=0$)
 
-#### ⌨️ Guide des Touches du Clavier :
-Le terminal affiche les commandes de direction ci-dessous :
+Une fois le robot stationné au point de départ voulu, appuyez sur **`k`** puis quittez avec **`Ctrl + C`** pour libérer le canal `/cmd_vel`.
 
-| Touche | Action sur le Robot | Description |
-| :---: | :--- | :--- |
-| **`i`** | **Avancer** | Déplacement linéaire vers l'avant ($+v$) |
-| **`,`** | **Reculer** | Déplacement linéaire vers l'arrière ($-v$) |
-| **`j`** | **Pivoter à Gauche** | Rotation pure anti-horaire sur place ($+\omega$) |
-| **`l`** | **Pivoter à Droite** | Rotation pure horaire sur place ($-\omega$) |
-| **`u`** | **Avancer + Virage Gauche** | Trajectoire en arc de cercle vers l'avant gauche |
-| **`o`** | **Avancer + Virage Droite** | Trajectoire en arc de cercle vers l'avant droite |
-| **`m`** | **Reculer + Virage Gauche** | Trajectoire en arc de cercle vers l'arrière gauche |
-| **`.`** | **Reculer + Virage Droite** | Trajectoire en arc de cercle vers l'arrière droite |
-| **`k`** | **ARRÊT D'URGENCE (Stop)** | Coupe instantanément les consignes de vitesse ($v=0, \omega=0$) |
-| **`q`** / **`z`** | Vitesse linéaire $\pm 10\%$ | Ajuste le pas d'incrément de la vitesse d'avance |
-| **`w`** / **`x`** | Vitesse angulaire $\pm 10\%$ | Ajuste le pas d'incrément de la vitesse de rotation |
-
-2. Conduisez le robot jusqu'au point de départ souhaité.
-3. Appuyez sur **`k`** pour immobiliser le robot.
-4. Quittez le téléop avec `Ctrl + C` pour libérer le topic `/cmd_vel`.
+> [TIP]
+> Vous pouvez lancer à tout moment l'outil `python3 src/ros2/show_pose.py` dans un terminal pour observer en direct les coordonnées cartésiennes et le cap avec rose des vents.
 
 ---
 
-### 🧠 Terminal 3 : Contrôleur Autonome Hors-Ligne (PioneerNN)
+### Terminal 3 : Contrôleur Autonome Hors-Ligne (PioneerNN)
 
-Ce terminal lance le réseau de neurones PioneerNN. Il lit automatiquement l'odométrie accumulée (avec détection automatique transparente de `/odom` ou `/wheel/odom`), calcule la transformation dans le repère local du robot, et prend le contrôle exclusif de `/cmd_vel` pour ramener le robot au quai $(0, 0, 0)$.
-
-1. Ouvrez un **Terminal 3** sur le robot :
+Lance le contrôleur en boucle fermée. Le nœud lit automatiquement la pose odométrique `/odom`, effectue la projection dans le repère local du véhicule, applique l'inférence PioneerNN à 20 Hz et pilote `/cmd_vel` jusqu'à l'amarrage complet à $(0, 0, 0)$.
 
 ```bash
-# Pour LIMO COBOT (ROS 2 Foxy) :
+# Sous ROS 2 Foxy :
 source /opt/ros/foxy/setup.bash
 cd ~/limo-offline-learning
 python3 src/evaluation/run_autonomous.py --real --speed-scale 0.6
 ```
 
-*(Note : `--speed-scale 0.6` ajuste la vitesse maximale à 0.30 m/s pour des essais en laboratoire fluides et sans patinage des roues. La rampe de décélération progressive et le filtre d'accélération garantissent un amarrage en douceur).*
+*(L'argument `--speed-scale 0.6` limite la vitesse de croisière à $0.30\text{ m/s}$, assurant une dynamique fluide sans patinage des pneus sur sol lisse).*
 
-*(Ou sous ROS 2 Humble : `source /opt/ros/humble/setup.bash && cd ~/limo-offline-learning && python3 src/evaluation/run_autonomous.py --real`)*
-
-2. **Déroulement de l'Amarrage :**
-   - Le script lit la pose courante depuis `/odom` et l'affiche à l'écran :
-     ```text
-     [INFO] Lecture de la pose initiale depuis /odom...
-     [INFO] Pose initiale détectée : x = 1.842 m, y = -0.512 m, theta = 42.15 deg
-     [Prêt] Appuyez sur Entrée pour démarrer l'amarrage autonome...
-     ```
-   - Vérifiez que l'aire de navigation est dégagée, puis appuyez sur **`[Entrée]`**.
-   - Le réseau PioneerNN calcule les commandes à 20 Hz jusqu'à l'amarrage parfait à la cible.
-   - Les données de trajectoire sont automatiquement enregistrées dans `data/evaluation/` pour l'analyse ISO 18646-2.
+1. Le script détecte la pose de départ et l'affiche :
+   ```text
+   [Odometry] Current robot pose: x = 1.84 m, y = -0.92 m, theta = 34.2°
+   [Ready] Press Enter to start autonomous docking...
+   ```
+2. Appuyez sur **`[Entrée]`** : le réseau prend les commandes, effectue la manœuvre d'approche, ralentit dans l'entonnoir des 40 cm, s'immobilise dans le cercle d'amarrage terminal ($D_{\text{stop}} = 0.08\text{ m}$), et valide les 30 secondes de maintien stationnaire sans dérive.
+3. Les données télémétriques et les graphiques de la session sont automatiquement archivés dans `data/evaluation/`.
 
 ---
 
-## 🔬 Spécifications Cinématiques & Normalisation
+## Spécifications Cinématiques & Formulation Mathématique
 
 > [!NOTE]
-> **Conformité aux Normes ROS REP-103 et Système International (SI) :**
-> Toutes les grandeurs physiques du projet respectent strictement le standard [ROS REP 103](https://www.ros.org/reps/rep-0103.html) :
+> **Conformité aux Standards ROS REP-103 et SI :**
 > - **Vitesse linéaire ($v$)** : $\text{m/s}$ ($V_{\max} = 0.50\text{ m/s}$)
 > - **Vitesse angulaire ($\omega$)** : $\text{rad/s}$ ($\Omega_{\max} = 1.00\text{ rad/s} \approx 57.30^\circ/\text{s}$, jamais en degrés/s)
-> - **Angle / Orientation ($\theta$)** : $\text{rad}$ ($[-\pi, +\pi]$)
-> - **Coordonnées spatiales ($x, y$)** : $\text{m}$ ($[-5.0, +5.0]\text{ m}$)
+> - **Angle / Orientation ($\theta$)** : $\text{rad}$ ramené dans $[-\pi, +\pi]$
+> - **Coordonnées de position ($x, y$)** : $\text{m}$ ($[-5.0, +5.0]\text{ m}$)
 
 ### Tableau Récapitulatif des Paramètres
 
-| Paramètre | Symbole | Valeur | Justification Physique et Mathématique |
+| Paramètre | Symbole | Valeur | Rôle dans le Contrôle |
 | :--- | :---: | :---: | :--- |
-| Bornes Spatiales de l'Arène | $X_{\max}, Y_{\max}$ | **$\pm 5.0\text{ m}$** | Couvre l'intégralité de la zone d'essai en laboratoire |
-| Pas d'Échantillonnage de Grille | $\Delta x, \Delta y$ | **$0.5\text{ m}$** | Discrétisation spatiale régulière du domaine d'apprentissage |
-| Cap Absolu du Châssis | $\theta_R$ | **$[-\pi, +\pi]\text{ rad}$** | Couverture intégrale du cercle trigonométrique $SO(2)$ |
-| Vitesse Linéaire Maximale | $V_{\max}$ | **$0.50\text{ m/s}$** | Limite cinématique maximale en mode différentiel |
-| Vitesse Angulaire Maximale | $\Omega_{\max}$ | **$1.00\text{ rad/s}$** | Taux de lacet sécurisé éliminant le glissement transversal des roues |
-| Ensemble des Vitesses Linéaires | $v_{\text{robot}}$ | **$\{-0.50, 0.0, +0.50\}\text{ m/s}$** | Ensemble d'actions ternaires discrètes |
-| Ensemble des Vitesses Angulaires | $w_{\text{robot}}$ | **$\{-1.00, 0.0, +1.00\}\text{ rad/s}$** | Ensemble d'actions ternaires discrètes |
-| Entonnoir de Décélération | $D_{\text{brake}}$ | **$0.20\text{ m}$** | Permet au MLP d'apprendre une rampe de freinage progressive |
-| Bande Morte Terminale d'Arrêt | $D_{\text{stop}}$ | **$0.05\text{ m}$** | Élimine les oscillations à haute fréquence et cycles limites à l'origine |
+| Domaine de l'Arène | $X_{\max}, Y_{\max}$ | **$\pm 5.0\text{ m}$** | Dimensions maximales de l'espace de navigation |
+| Pas de Grille Standard | $\Delta x, \Delta y$ | **$0.20\text{ m}$** | Discrétisation spatiale du domaine d'entraînement |
+| Cap Absolu du Châssis | $\theta_R$ | **$[-\pi, +\pi]\text{ rad}$** | Couverture complète du groupe $SO(2)$ |
+| Vitesse Linéaire Maximale | $V_{\max}$ | **$0.50\text{ m/s}$** | Plafond de saturation de vitesse longitudinale |
+| Vitesse Angulaire Maximale | $\Omega_{\max}$ | **$1.00\text{ rad/s}$** | Plafond de saturation de vitesse de rotation |
+| Actions Linéaires Cibles | $v_{\text{robot}}$ | **$\{-0.50, 0.0, +0.50\}\text{ m/s}$** | Croisière ternaire avec rampe de décélération |
+| Actions Angulaires Cibles | $w_{\text{robot}}$ | **$\{-1.00, 0.0, +1.00\}\text{ rad/s}$** | Actions ternaires discrètes avec amortissement radial $K_\theta$ |
+| Entonnoir de Décélération | $D_{\text{brake}}$ | **$0.40\text{ m}$** | Distance amorçant le ralentissement progressif |
+| Rayon d'Amarrage Terminal | $D_{\text{stop}}$ | **$0.08\text{ m}$** | Rayon de capture terminale (8 cm) |
+| Tolérance Angulaire Terminale | $\theta_{\text{tol}}$ | **$0.26\text{ rad } (\approx 15.0^\circ)$** | Seuil d'alignement angulaire pour l'arrêt ISO 18646-2 |
+| Durée de Maintien Stationnaire | $T_{\text{dwell}}$ | **$30.0\text{ s}$** | Vérification d'immobilité stricte continue |
 
-### Transformation du Repère Global vers le Repère Robot
+### Transformation Centrée sur le Robot (Robot-Centric)
 
-Le réseau de neurones opère exclusivement dans le **repère local du châssis (robot-centric)**, garantissant une invariance par translation globale :
+Le réseau opère exclusivement dans le **repère local du véhicule**, garantissant l'invariance par rapport aux repères globaux :
 
 $$\begin{bmatrix} x_{\text{cible}}^{\text{robot}} \\ y_{\text{cible}}^{\text{robot}} \end{bmatrix} = \begin{bmatrix} \cos\theta_R & \sin\theta_R \\ -\sin\theta_R & \cos\theta_R \end{bmatrix} \begin{bmatrix} x_{\text{cible}} - x_{\text{robot}} \\ y_{\text{cible}} - y_{\text{robot}} \end{bmatrix}$$
 
 ### Normalisation des Entrées & Sorties du Réseau
 
-$$\text{in}_0 = \frac{x_{\text{cible}}^{\text{robot}}}{5.0} \in [-1.0, 1.0], \quad \text{in}_1 = \frac{y_{\text{cible}}^{\text{robot}}}{5.0} \in [-1.0, 1.0], \quad \text{in}_2 = \frac{\theta_{\text{robot}}}{\pi} \in [-1.0, 1.0]$$
+$$\text{in}_0 = \frac{x_{\text{cible}}^{\text{robot}}}{5.0} \in [-1.0, 1.0], \quad \text{in}_1 = \frac{y_{\text{cible}}^{\text{robot}}}{5.0} \in [-1.0, 1.0], \quad \text{in}_2 = \frac{\text{wrap}(\theta_{\text{robot}} - \theta_{\text{cible}})}{\pi} \in [-1.0, 1.0]$$
 
-Pendant l'inférence en boucle fermée sur le robot :
-$$v_{\text{cmd}} = \hat{y}_0 \times 0.50\text{ m/s}, \quad \omega_{\text{cmd}} = \hat{y}_1 \times 1.00\text{ rad/s}$$
+À l'amarrage $(0, 0, 0)$, le vecteur d'entrée s'annule rigoureusement : $[\text{in}_0, \text{in}_1, \text{in}_2]^T \to [0, 0, 0]^T$.
+
+Lors de l'inférence en boucle fermée sur le robot :
+$$v_{\text{cmd}} = \hat{y}_0 \times 0.50\text{ m/s}, \quad \omega_{\text{cmd}} = \hat{y}_1 \times 1.00 \times K_\theta(x_{\text{cible}}^{\text{robot}}, y_{\text{cible}}^{\text{robot}})\text{ rad/s}$$
+
+avec le gain d'amortissement radial :
+$$K_\theta(x_R, y_R) = 1.0 - 0.9 \exp\left(-10 (x_R^2 + y_R^2)^2\right) \in [0.1, 1.0]$$
 
 ---
 
-## ⚡ Démarrage Rapide & Simulation Gazebo
+## Démarrage Rapide & Simulation Gazebo
 
 ### 1. Installation de l'Environnement
 
 ```bash
-# Cloner le dépôt
 git clone https://github.com/jupivato/limo-offline-learning.git
 cd limo-offline-learning
-
-# Installer les dépendances Python
 pip install -r requirements.txt
 ```
 
 ### 2. Génération du Jeu de Données Hors-Ligne
 
-Génère le dataset équilibré de 45 000 échantillons sur $[-5, +5]\text{ m}$ tous les $0.5\text{ m}$, avec sous-grille fine d'amarrage, symétrie sagittale et raccordement périodique à $\pm\pi$ :
-
+Génère le dataset canonique de 45 000 échantillons équilibrés :
 ```bash
 python3 src/generate_dataset.py
 ```
 
-### 3. Entraînement du Contrôleur Neuronal sans Biais
+### 3. Entraînement du Contrôleur Neuronal
 
-Entraîne l'architecture PioneerNN (`3 -> 1000 -> 2`, `use_bias=False`) garantissant l'invariance stricte de repos $f(0, 0, 0) = [0, 0]$ :
-
+Entraîne l'architecture PioneerNN (`3 -> 1000 -> 2`, `use_bias=True`) avec l'optimiseur AdamW et la perte MSE pondérée :
 ```bash
 python3 src/train_offline.py
 ```
 
-### 4. Visualisation des Courbes de Convergence
+### 4. Tracé des Courbes de Convergence
 
-Affiche les courbes de convergence de la perte quadratique moyenne (MSE) :
-
+Génère les graphiques d'évolution de la perte MSE et du taux d'apprentissage :
 ```bash
 python3 src/visualization/plot_curves.py
 ```
 
-### 5. Évaluation sous Gazebo 3D & Benchmark ISO 18646-2
+### 5. Évaluation sous Gazebo 3D ou en Mode Cinématique
 
-#### Test d'un Scénario Unique sous Simulation Gazebo :
+#### Essai Unitaire :
 ```bash
 python3 src/evaluation/run_autonomous.py \
     --weights models/pioneer_model_weights.json \
@@ -287,57 +276,57 @@ python3 src/evaluation/run_autonomous.py \
     --target 0.0 0.0 0.0
 ```
 
-#### Campagne de Certification Complète (20 Scénarios sous Norme ISO 18646-2) :
+#### Campagne de Certification Complète ISO 18646-2 :
 ```bash
-python3 src/evaluation/run_batch_benchmark.py \
-    --gazebo \
-    --suite extended \
-    --weights models/pioneer_model_weights.json \
-    --outdir data/evaluation/batch_run
+# Mode simulation cinématique rapide (sans besoin d'ouvrir Gazebo) :
+python3 src/evaluation/run_batch_benchmark.py --suite canonical
+
+# Ou directement connecté au simulateur Gazebo 3D :
+python3 src/evaluation/run_batch_benchmark.py --suite extended --gazebo
 ```
 
 ---
 
-## 📊 Outils d'Analyse & Visualisation
+## Outils d'Analyse Métrologique & Visualisation
 
-Le module `src/visualization/` regroupe l'ensemble des diagnostics scientifiques :
+Le module `src/visualization/` fournit l'ensemble des diagnostics scientifiques :
 
-- **Cartographie Vectorielle du Plan XY** :
+- **Visualiseur Comparatif & Tableaux de Bord ISO 18646-2** :
   ```bash
-  python3 src/visualization/evaluate_xy_plane.py
+  python3 src/visualization/benchmark_visualizer.py --dir data/evaluation/test_2026_11_10_16_40_10
   ```
-  Génère les cartes de champs de vecteurs (*quiver plots*) et les cartes de chaleur (*heatmaps*) démontrant la convergence des flux vers l'origine $(0, 0)$.
+  Génère la planche récapitulative des trajectoires (`benchmark_trajectory.png`), le dashboard complet 3x3 (`benchmark_all.png`), la grille par quadrant (`benchmark_quadrants.png`), la carte vectorielle SVG (`benchmark_trajectory.svg`) et le rapport web interactif (`benchmark_dashboard.html`).
 
-- **Tableau de Bord Interactif des Trajectoires** :
-  ```bash
-  python3 src/visualization/benchmark_visualizer.py
-  ```
-  Génère des visualisations 2D comparatives des trajectoires et un rapport HTML interactif complet.
-
-- **Matrices de Confusion & Équilibre des Classes** :
+- **Matrices de Confusion & Diagnostics du Modèle** :
   ```bash
   python3 src/visualization/plot_confusion_and_dataset_analysis.py
   ```
-  Vérifie la répartition rigoureuse des 9 manœuvres canoniques de l'ENIB et la symétrie sagittale du dataset.
+  Calcule les matrices de confusion de classification pour les commandes linéaires et angulaires, génère la carte de densité spatiale de l'arène 2D et les histogrammes comparatifs entre le superviseur expert et la prédiction de la PioneerNN.
+
+- **Calcul Direct des Métriques ISO 18646-2** :
+  ```bash
+  python3 calculus/calculate_iso_metrics.py --dir data/evaluation/test_2026_11_10_16_40_10
+  ```
+  Extrait et calcule directement depuis les traces CSV les métriques métrologiques normalisées ($A_p$, $R_p$, $A_o$, $R_o$).
 
 ---
 
-## 📏 Certification Métrologique ISO 18646-2
+## Certification Métrologique ISO 18646-2
 
-La norme internationale **ISO 18646-2** (*Robots de service - Navigation des robots mobiles terrestres : Précision et répétabilité de pose*) définit les métriques calculées par `calculus/calculate_iso_metrics.py` :
+La norme internationale **ISO 18646-2** (*Robots de service - Navigation des robots mobiles terrestres : Précision et répétabilité de pose*) régit l'évaluation du système :
 
-- **Précision de Positionnement ($A_p$)** : Distance euclidienne entre la position moyenne d'arrêt et la pose nominale visée :
+- **Précision de Positionnement ($A_p$)** : Distance euclidienne entre le barycentre des arrivées et la cible nominale :
   $$A_p = \sqrt{(\bar{x} - x_{\text{cible}})^2 + (\bar{y} - y_{\text{cible}})^2}$$
-- **Répétabilité de Positionnement ($R_p$)** : Rayon de dispersion à $3\sigma$ des arrivées autour du barycentre :
+- **Répétabilité de Positionnement ($R_p$)** : Rayon de dispersion à $3\sigma$ des points finaux autour du barycentre :
   $$R_p = \bar{l} + 3 S_l$$
-- **Précision d'Orientation ($A_o$) & Répétabilité ($R_o$)** : Erreur angulaire absolue moyenne et écart-type associé à $3\sigma$.
-- **Critère de Stabilisation Terminale** : Maintien immobile en zone morte pendant une période de repos de 30 secondes sans cycle limite moteur.
+- **Précision d'Orientation ($A_o$) & Répétabilité ($R_o$)** : Erreur angulaire absolue moyenne et dispersion à $3\sigma$.
+- **Validation Stationnaire (Dwell Time)** : Vérification de l'absence de micro-oscillations motrices ($< 5\text{ mm}$, vitesses nulles) pendant au moins 30 secondes au quai $(0, 0, 0)$.
 
 ---
 
-## 👥 Auteurs & Affiliation
+## Auteurs & Affiliation
 
 - **Auteurs du Projet** : Julia PIVATO DE OLIVEIRA & Zeinab KOMAIHA
 - **Projet** : Projet Pluridisciplinaire en Équipe (PPE)
 - **Institution** : Centre Européen de Réalité Virtuelle (CERV) / École Nationale d'Ingénieurs de Brest (ENIB)
-- **Plateforme Matérielle** : AgileX Robotics LIMO (Châssis 4 roues différentielles / Ackermann ROS 2)
+- **Plateforme Matérielle** : AgileX Robotics LIMO (Châssis différentiel 4 roues motrices / ROS 2)

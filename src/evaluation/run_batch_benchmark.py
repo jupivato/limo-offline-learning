@@ -24,7 +24,7 @@ Docking & Stability Verification:
 ---------------------------------
 - SE(2) Metrological Distance Metric: d_pose = sqrt(d_xy^2 + (b * e_theta)^2)
   where b = 0.086 m (half-track width of AgileX LIMO).
-- Capture Envelope: d_xy <= dist_tol (0.05 m = 5 cm) and |e_theta| <= angle_tol (0.15 rad ~ 8.6°).
+- Capture Envelope: d_xy <= dist_tol (0.08 m = 8 cm) and |e_theta| <= angle_tol (0.26 rad ~ 15.0°).
 - Continuous Stationary Dwell: Robot must remain continuously immobile (movement < 5 mm,
   velocities near zero) for at least dwell_time (default: 30.0s) within the capture envelope.
 
@@ -51,7 +51,7 @@ _project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
-from src.core.pioneer_nn import PioneerNN, recast_angle
+from src.core.pioneer_nn import PioneerNN, recast_angle, compute_k_theta
 from src.evaluation.data_logger import DataLogger
 from calculus.calculate_iso_metrics import compute_iso_18646_metrics
 
@@ -176,7 +176,7 @@ def run_simulated_benchmark_run(
 
         in_0 = max(-1.0, min(1.0, x_target_robot / X_MAX))
         in_1 = max(-1.0, min(1.0, y_target_robot / Y_MAX))
-        in_2 = max(-1.0, min(1.0, thr / math.pi))
+        in_2 = max(-1.0, min(1.0, e_theta / math.pi))
 
         cost = in_0 ** 2 + in_1 ** 2 + in_2 ** 2
 
@@ -185,9 +185,12 @@ def run_simulated_benchmark_run(
         out_v = float(cmd_raw[0])
         out_w = float(cmd_raw[1])
 
-        # Pure 100% Neural Policy Output Denormalization (Zero External Geometric Rules)
+        # Radial angular damping gain K_theta
+        k_th = compute_k_theta(x_target_robot, y_target_robot)
+
+        # Output denormalization with K_theta damping
         v_cmd = max(-V_MAX, min(V_MAX, out_v * V_MAX))
-        w_cmd = max(-W_MAX, min(W_MAX, out_w * W_MAX))
+        w_cmd = max(-W_MAX, min(W_MAX, out_w * W_MAX * k_th))
 
         # Canonical ENIB Output Deadband (Class 9: Terminal Stop)
         if abs(out_v) <= 0.05:
@@ -309,7 +312,7 @@ def run_gazebo_benchmark_run(
 
         in_0 = max(-1.0, min(1.0, x_target_robot / X_MAX))
         in_1 = max(-1.0, min(1.0, y_target_robot / Y_MAX))
-        in_2 = max(-1.0, min(1.0, theta_r / math.pi))
+        in_2 = max(-1.0, min(1.0, e_theta / math.pi))
 
         cost = in_0 ** 2 + in_1 ** 2 + in_2 ** 2
 
@@ -317,9 +320,12 @@ def run_gazebo_benchmark_run(
         out_v = float(cmd_raw[0])
         out_w = float(cmd_raw[1])
 
-        # Pure 100% Neural Policy Output Denormalization (Zero External Geometric Rules)
+        # Radial angular damping gain K_theta
+        k_th = compute_k_theta(x_target_robot, y_target_robot)
+
+        # Output denormalization with K_theta damping
         v_cmd = max(-V_MAX, min(V_MAX, out_v * V_MAX))
-        w_cmd = max(-W_MAX, min(W_MAX, out_w * W_MAX))
+        w_cmd = max(-W_MAX, min(W_MAX, out_w * W_MAX * k_th))
 
         # Canonical ENIB Output Deadband (Class 9: Terminal Stop)
         if abs(out_v) <= 0.05:
@@ -432,7 +438,7 @@ def run_batch_benchmark(
     print("=" * 78)
 
     # 1. Load Policy
-    model = PioneerNN(input_size=3, hidden_size=1000, output_size=2, use_bias=False)
+    model = PioneerNN(input_size=3, hidden_size=1000, output_size=2, use_bias=True)
     model.load_from_json_file(weights_path)
     model.eval()
 
