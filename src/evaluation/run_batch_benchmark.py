@@ -51,7 +51,7 @@ _project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
-from src.core.pioneer_nn import PioneerNN, recast_angle, compute_k_theta
+from src.core.pioneer_nn import PioneerNN, recast_angle
 from src.evaluation.data_logger import DataLogger
 from calculus.calculate_iso_metrics import compute_iso_18646_metrics
 
@@ -185,18 +185,9 @@ def run_simulated_benchmark_run(
         out_v = float(cmd_raw[0])
         out_w = float(cmd_raw[1])
 
-        # Radial angular damping gain K_theta
-        k_th = compute_k_theta(x_target_robot, y_target_robot)
-
-        # Output denormalization with K_theta damping
+        # Output denormalization (pure end-to-end neural output)
         v_cmd = max(-V_MAX, min(V_MAX, out_v * V_MAX))
-        w_cmd = max(-W_MAX, min(W_MAX, out_w * W_MAX * k_th))
-
-        # Canonical ENIB Output Deadband (Class 9: Terminal Stop)
-        if abs(out_v) <= 0.05:
-            v_cmd = 0.0
-        if abs(out_w) <= 0.01:
-            w_cmd = 0.0
+        w_cmd = max(-W_MAX, min(W_MAX, out_w * W_MAX))
 
         # Physical immobilization window verification
         pos_window.append((elapsed, x, y, th))
@@ -320,18 +311,9 @@ def run_gazebo_benchmark_run(
         out_v = float(cmd_raw[0])
         out_w = float(cmd_raw[1])
 
-        # Radial angular damping gain K_theta
-        k_th = compute_k_theta(x_target_robot, y_target_robot)
-
-        # Output denormalization with K_theta damping
+        # Output denormalization (pure end-to-end neural output)
         v_cmd = max(-V_MAX, min(V_MAX, out_v * V_MAX))
-        w_cmd = max(-W_MAX, min(W_MAX, out_w * W_MAX * k_th))
-
-        # Canonical ENIB Output Deadband (Class 9: Terminal Stop)
-        if abs(out_v) <= 0.05:
-            v_cmd = 0.0
-        if abs(out_w) <= 0.01:
-            w_cmd = 0.0
+        w_cmd = max(-W_MAX, min(W_MAX, out_w * W_MAX))
 
         pos_window.append((elapsed, pos[0], pos[1], pos[2]))
         if len(pos_window) >= 20:

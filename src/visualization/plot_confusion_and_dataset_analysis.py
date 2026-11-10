@@ -32,7 +32,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-from src.core.pioneer_nn import PioneerNN, compute_k_theta
+from src.core.pioneer_nn import PioneerNN
 
 plt.rcParams['font.sans-serif'] = 'DejaVu Sans'
 plt.rcParams['font.family'] = 'sans-serif'

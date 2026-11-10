@@ -36,7 +36,7 @@
         },
         "outputs_robot_denormalization": {
             "v_cmd": "v_neural * 0.50",
-            "w_cmd": "w_neural * 1.00 * K_theta(x_R, y_R)"
+            "w_cmd": "w_neural * 1.00"
         }
     },
     "kinematics": {

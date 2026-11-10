@@ -60,7 +60,7 @@ try:
 except (ImportError, ModuleNotFoundError):
     ROS2_AVAILABLE = False
 
-from src.core.pioneer_nn import PioneerNN, recast_angle, compute_k_theta
+from src.core.pioneer_nn import PioneerNN, recast_angle
 from src.evaluation.data_logger import DataLogger
 
 try:
@@ -235,18 +235,9 @@ def run_autonomous_session(
             out_v = float(cmd_raw[0])
             out_w = float(cmd_raw[1])
 
-            # Radial angular velocity damping gain K_theta
-            k_th = compute_k_theta(x_target_robot, y_target_robot)
-
-            # Neural policy output denormalization with K_theta damping
+            # Pure neural policy output denormalization (100% full torque, zero external damping)
             v_cmd = max(-v_max_effective, min(v_max_effective, out_v * v_max_effective))
-            w_cmd = max(-w_max_effective, min(w_max_effective, out_w * w_max_effective * k_th))
-
-            # Canonical ENIB Output Deadband (Class 9: Terminal Stop)
-            if abs(out_v) <= 0.05:
-                v_cmd = 0.0
-            if abs(out_w) <= 0.01:
-                w_cmd = 0.0
+            w_cmd = max(-w_max_effective, min(w_max_effective, out_w * w_max_effective))
 
             # Track 1-second displacement window for physical immobilization verification
             pos_window.append((elapsed, pos[0], pos[1], pos[2]))
@@ -267,9 +258,6 @@ def run_autonomous_session(
             in_dock_envelope = (dist_xy <= dist_tol and abs(e_theta) <= angle_tol)
 
             if in_dock_envelope:
-                if is_stationary:
-                    # Vehicle naturally stopped at dock: engage zero-velocity hold for ISO 30s dwell test
-                    v_cmd, w_cmd = 0.0, 0.0
                 if not dock_arrival_announced:
                     print(f"\n[Dock Arrival] Robot arrived in dock envelope (d={dist_xy*100:.1f} cm, θ={math.degrees(abs(e_theta)):.1f}°)! Holding for {dwell_time_required:.0f}s dwell test...")
                     dock_arrival_announced = True
