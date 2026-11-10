@@ -41,6 +41,7 @@ data/curated/**/*.svg
 data/curated/**/*.html
 # Evaluation results, metrics, benchmarks and plots (local analysis only)
 data/evaluation/
+calculus/*.csv
 docs/images/
 docs/docs/
 *.zip

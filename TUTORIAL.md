@@ -154,7 +154,12 @@ ros2 launch limo_base limo_base.launch.py
 ### 3.2 Terminal 2 sur le Robot — Déplacer le Robot au Clavier (Téléopération)
 Ouvrez un second terminal pour éloigner manuellement le robot de la cible jusqu'à la position de départ choisie :
 ```bash
+# Pour LIMO COBOT (Ubuntu 20.04 / ROS 2 Foxy) :
 source /opt/ros/foxy/setup.bash
+ros2 run teleop_twist_keyboard teleop_twist_keyboard
+
+# Ou pour LIMO Standard (Ubuntu 22.04 / ROS 2 Humble) :
+source /opt/ros/humble/setup.bash
 ros2 run teleop_twist_keyboard teleop_twist_keyboard
 ```
 
@@ -172,7 +177,14 @@ Conduisez le véhicule à l'endroit désiré (ex : à $1.5\text{ m}$ ou $2.0\tex
 
 ### 3.3 Terminal 3 sur le Robot — Lancer le Contrôleur Autonome PioneerNN
 ```bash
+# Pour LIMO COBOT (Ubuntu 20.04 / ROS 2 Foxy) :
 source /opt/ros/foxy/setup.bash
+cd ~/limo-offline-learning
+
+python3 src/evaluation/run_autonomous.py --real --speed-scale 0.6
+
+# Ou pour LIMO Standard (Ubuntu 22.04 / ROS 2 Humble) :
+source /opt/ros/humble/setup.bash
 cd ~/limo-offline-learning
 
 python3 src/evaluation/run_autonomous.py --real --speed-scale 0.6
