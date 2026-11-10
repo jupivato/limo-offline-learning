@@ -189,9 +189,14 @@ def parse_final_pose(csv_path: str) -> Optional[Dict[str, Any]]:
         xf = float(last_row.get("x", 0.0))
         yf = float(last_row.get("y", 0.0))
         thf = float(last_row.get("theta", 0.0))
-        tx = float(last_row.get("tx", 0.0))
-        ty = float(last_row.get("ty", 0.0))
-        tth = float(last_row.get("ttheta", 0.0))
+        ex = float(last_row.get("e_x", 0.0))
+        ey = float(last_row.get("e_y", 0.0))
+        eth = float(last_row.get("e_theta", 0.0))
+
+        # Infer target coordinates from pose and error if not explicitly logged
+        tx = float(last_row.get("tx", xf - ex))
+        ty = float(last_row.get("ty", yf - ey))
+        tth = float(last_row.get("ttheta", recast_angle(thf - eth)))
 
         quadrant = 1
         if (x0 - tx) >= 0 and (y0 - ty) >= 0:
@@ -260,7 +265,12 @@ def evaluate_directory(input_dir: str = "data/evaluation", output_dir: str = "ca
 
     for q in sorted(trials_by_quad.keys()):
         group = trials_by_quad[q]
-        metrics = compute_iso_18646_metrics(group)
+        metrics = compute_iso_18646_metrics(
+            group,
+            xc=group[0].get("tx", 0.0),
+            yc=group[0].get("ty", 0.0),
+            oc=group[0].get("tth", 0.0)
+        )
         if metrics:
             metrics["quadrant"] = q
             quad_summary.append(metrics)
@@ -271,7 +281,12 @@ def evaluate_directory(input_dir: str = "data/evaluation", output_dir: str = "ca
                 f"Angle Accuracy (Ao): {metrics['Ao_abs_deg']:.2f}°"
             )
 
-    global_metrics = compute_iso_18646_metrics(trials)
+    global_metrics = compute_iso_18646_metrics(
+        trials,
+        xc=trials[0].get("tx", 0.0),
+        yc=trials[0].get("ty", 0.0),
+        oc=trials[0].get("tth", 0.0)
+    )
     if global_metrics:
         global_metrics["quadrant"] = "GLOBAL"
         quad_summary.append(global_metrics)
