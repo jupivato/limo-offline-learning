@@ -33,7 +33,8 @@ class DataLogger:
         target: List[float],
         command: List[float],
         grad: Optional[List[float]] = None,
-        cost: float = 0.0
+        cost: float = 0.0,
+        sim_time: Optional[float] = None
     ) -> None:
         """
         Logs a telemetry sample at the current time step.
@@ -44,6 +45,7 @@ class DataLogger:
             command (List[float]): Applied velocity command [v_lin, v_ang].
             grad (List[float], optional): Gradient [grad_0, grad_1] (default [0.0, 0.0]).
             cost (float): Scalar cost value at the current step.
+            sim_time (Optional[float]): Explicit simulation time in seconds (when running faster than real-time).
         """
         if self._start_time is None:
             self._start_time = time.time()
@@ -51,7 +53,7 @@ class DataLogger:
         if grad is None:
             grad = [0.0, 0.0]
 
-        t = time.time() - self._start_time
+        t = float(sim_time) if sim_time is not None else (time.time() - self._start_time)
         x, y, theta = position
         tx, ty, ttheta = target
         v_lin, v_ang = command[0], command[1]

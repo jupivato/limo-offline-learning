@@ -188,8 +188,8 @@ def expert_rule_based_controller(
         m_id, _ = classify_enib_maneuver(v, w)
         return v, w, m_id
 
-    # 2. Reverse Parking Corridor (Dock situated directly behind: x_tr < -0.10m and |y_tr| <= 0.80m)
-    if x_tr < -0.10 and abs(y_tr) <= 0.80:
+    # 2. Reverse Parking Corridor (Dock situated directly behind: x_tr < -0.06m and |y_tr| <= 0.80m)
+    if x_tr < -0.06 and abs(y_tr) <= 0.80:
         if dist < d_brake:
             ramp = max(0.0, min(1.0, (dist - d_stop) / (d_brake - d_stop)))
             v = -v_max * ramp
@@ -288,9 +288,9 @@ def generate_balanced_dataset(
                 raw_samples_by_class[m_id].append([x, y, th, v, w])
 
     # --------------------------------------------------------------------------
-    # 3. High-Density Reverse Parking Corridor (-2.5m <= x <= -0.1m, |y| <= 0.4m, step 0.02m)
+    # 3. High-Density Reverse Parking Corridor (-2.5m <= x <= -0.06m, |y| <= 0.4m, step 0.02m)
     # --------------------------------------------------------------------------
-    rev_xs = [round(-2.5 + i * 0.02, 3) for i in range(121)]
+    rev_xs = [round(-2.5 + i * 0.02, 3) for i in range(123)]
     rev_ys = [round(-0.40 + i * 0.02, 3) for i in range(41)]
     rev_thetas = [round(-math.pi + i * (2.0 * math.pi / 32), 4) for i in range(33)]
     for x in rev_xs:
@@ -304,7 +304,7 @@ def generate_balanced_dataset(
     # Fine 2cm resolution in braking funnel (0.06m to 0.50m) and 5cm in cruise corridor
     # --------------------------------------------------------------------------
     fwd_xs = [round(0.06 + i * 0.02, 3) for i in range(23)] + [round(0.55 + i * 0.05, 3) for i in range(40)]
-    fwd_ys = [round(-0.60 + i * 0.05, 3) for i in range(25)]
+    fwd_ys = [round(-0.60 + i * 0.04, 3) for i in range(31)]
     fwd_thetas = [round(-math.pi + i * (2.0 * math.pi / 32), 4) for i in range(33)]
     for x in fwd_xs:
         for y in fwd_ys:
@@ -313,19 +313,23 @@ def generate_balanced_dataset(
                 raw_samples_by_class[m_id].append([x, y, th, v, w])
 
     # --------------------------------------------------------------------------
-    # 5. Bilateral Sagittal Mirroring (Zero Left/Right Directional Bias)
+    # 5. Bilateral Sagittal Mirroring into True Maneuver Classes
     # --------------------------------------------------------------------------
+    mirrored_by_class: Dict[int, List[List[float]]] = {i: [] for i in range(1, 10)}
     for m_id in range(1, 10):
-        mirrored_list = []
         for s in raw_samples_by_class[m_id]:
-            # Sagittal reflection: (x, y, theta, v, w) -> (x, -y, -theta, v, -w)
+            # Preserve consistent CCW symmetry breaking at |theta| = pi
+            if abs(abs(s[2]) - math.pi) < 1e-3:
+                continue
             mx = s[0]
             my = -s[1]
             mth = recast_angle(-s[2])
             mv = s[3]
             mw = -s[4]
-            mirrored_list.append([mx, my, mth, mv, mw])
-        raw_samples_by_class[m_id].extend(mirrored_list)
+            new_m_id, _ = classify_enib_maneuver(mv, mw)
+            mirrored_by_class[new_m_id].append([mx, my, mth, mv, mw])
+    for m_id in range(1, 10):
+        raw_samples_by_class[m_id].extend(mirrored_by_class[m_id])
 
     # --------------------------------------------------------------------------
     # 6. Periodic Boundary Sewing (Topology: S^1 equivalence of -pi and +pi)
@@ -341,31 +345,32 @@ def generate_balanced_dataset(
         raw_samples_by_class[m_id].extend(sewn_list)
 
     # --------------------------------------------------------------------------
-    # 7. Deduplication and Exact Stratified Balancing (5,000 unique per class)
+    # 7. Deduplication by State and Exact Stratified Balancing (5,000 unique per class)
     # --------------------------------------------------------------------------
     balanced_samples: List[List[float]] = []
     final_counts: Dict[int, int] = {}
-    random.seed(42)  # Deterministic seed for scientific reproducibility
+    random.seed(42)
 
     for m_id in range(1, 10):
-        # Deduplicate using rounded tuples as hashable keys
         unique_map = {}
         for s in raw_samples_by_class[m_id]:
-            key = (round(s[0], 4), round(s[1], 4), round(s[2], 4), round(s[3], 2), round(s[4], 2))
-            if key not in unique_map:
-                unique_map[key] = [key[0], key[1], key[2], key[3], key[4]]
+            state_key = (round(s[0], 4), round(s[1], 4), round(s[2], 4))
+            if state_key not in unique_map:
+                unique_map[state_key] = [state_key[0], state_key[1], state_key[2], round(s[3], 2), round(s[4], 2)]
 
         unique_pool = list(unique_map.values())
 
         random.seed(42 + m_id)
         if len(unique_pool) >= samples_per_class:
-            # Uniform unbiased sampling across all spatial positions and all 24 angular headings
             selected = random.sample(unique_pool, samples_per_class)
         else:
-            # Uniform cyclic oversampling with random remainder for compact minority classes
-            repeats = samples_per_class // len(unique_pool)
-            remainder = samples_per_class % len(unique_pool)
-            selected = unique_pool * repeats + random.sample(unique_pool, remainder)
+            selected = list(unique_pool)
+            while len(selected) < samples_per_class:
+                base = random.choice(unique_pool)
+                jx = round(base[0] + random.gauss(0.0, 0.0005), 4)
+                jy = round(base[1] + random.gauss(0.0, 0.0005), 4)
+                jth = round(recast_angle(base[2] + random.gauss(0.0, 0.0005)), 4)
+                selected.append([jx, jy, jth, base[3], base[4]])
 
         balanced_samples.extend(selected)
         final_counts[m_id] = len(selected)

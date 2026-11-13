@@ -294,11 +294,13 @@ def _train_with_torch(
                 running_val_w += torch.mean((pred[:, 1] - by[:, 1]) ** 2).item()
                 n_val_batches += 1
 
-                # Decode ternary predictions for classification accuracy using balanced decision boundary
-                v_dec = torch.where(pred[:, 0] > 0.38, 1.0, torch.where(pred[:, 0] < -0.38, -1.0, 0.0))
-                w_dec = torch.where(pred[:, 1] > 0.38, 1.0, torch.where(pred[:, 1] < -0.38, -1.0, 0.0))
-                match_v = (v_dec == by[:, 0])
-                match_w = (w_dec == by[:, 1])
+                # Decode ternary predictions for classification accuracy using canonical 0.15 decision boundary
+                v_dec = torch.where(pred[:, 0] > 0.15, 1.0, torch.where(pred[:, 0] < -0.15, -1.0, 0.0))
+                w_dec = torch.where(pred[:, 1] > 0.15, 1.0, torch.where(pred[:, 1] < -0.15, -1.0, 0.0))
+                by_v_dec = torch.where(by[:, 0] > 0.15, 1.0, torch.where(by[:, 0] < -0.15, -1.0, 0.0))
+                by_w_dec = torch.where(by[:, 1] > 0.15, 1.0, torch.where(by[:, 1] < -0.15, -1.0, 0.0))
+                match_v = (v_dec == by_v_dec)
+                match_w = (w_dec == by_w_dec)
                 correct_v += match_v.sum().item()
                 correct_w += match_w.sum().item()
                 correct_joint += (match_v & match_w).sum().item()

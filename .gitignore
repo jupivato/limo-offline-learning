@@ -60,6 +60,8 @@ docs/EXPLICATION_PERTE_MSE.md
 docs/LEARNING_RATE_STUDY.md
 docs/PLANIFICATION_APPRENTISSAGE_HORS_LIGNE.md
 docs/PARALLEL_PARKING_IMPROVEMENT_PLAN.md
+docs/ANALISE_ERROS_E_MELHORIAS.md
+docs/EXPLICACAO_PROJETO_E_PLANO_PROFESSOR.md
 src/run_individual_trainings*.py
 src/evaluation/plot_individual_grid_study.py
 

@@ -40,6 +40,7 @@ import time
 import math
 import csv
 import json
+import random
 import shutil
 import argparse
 import collections
@@ -144,7 +145,8 @@ def run_simulated_benchmark_run(
     angle_tol: float = DEFAULT_ANGLE_TOL,
     dwell_time_required: float = DEFAULT_DWELL_TIME,
     output_dir: str = "data/evaluation/batch_run",
-    output_images_dir: Optional[str] = None
+    output_images_dir: Optional[str] = None,
+    save_session_plot: bool = True
 ) -> Dict[str, Any]:
     """
     Executes a single benchmark run under 20 Hz closed-loop kinematic simulation.
@@ -215,7 +217,7 @@ def run_simulated_benchmark_run(
         else:
             dwell_timer = 0.0
 
-        logger.log(position=[x, y, th], target=target, command=[v_cmd, w_cmd], grad=[0.0, 0.0], cost=cost)
+        logger.log(position=[x, y, th], target=target, command=[v_cmd, w_cmd], grad=[0.0, 0.0], cost=cost, sim_time=elapsed)
 
         # 20 Hz Euler forward unicycle integration
         x += v_cmd * math.cos(th) * dt
@@ -234,7 +236,8 @@ def run_simulated_benchmark_run(
     csv_path = os.path.join(output_dir, f"{slug}.csv")
     png_path = os.path.join(img_dir, f"{slug}.png")
     logger.save(csv_path)
-    logger.save_plot(png_path)
+    if save_session_plot:
+        logger.save_plot(png_path)
 
     err_dist = math.hypot(x - target[0], y - target[1])
     err_theta = abs(recast_angle(th - target[2]))
@@ -267,7 +270,8 @@ def run_gazebo_benchmark_run(
     angle_tol: float = DEFAULT_ANGLE_TOL,
     dwell_time_required: float = DEFAULT_DWELL_TIME,
     output_dir: str = "data/evaluation/batch_run",
-    output_images_dir: Optional[str] = None
+    output_images_dir: Optional[str] = None,
+    save_session_plot: bool = True
 ) -> Dict[str, Any]:
     """
     Executes a single benchmark run under Gazebo with automated teleportation and dwell verification.
@@ -355,7 +359,8 @@ def run_gazebo_benchmark_run(
     csv_path = os.path.join(output_dir, f"{slug}.csv")
     png_path = os.path.join(img_dir, f"{slug}.png")
     logger.save(csv_path)
-    logger.save_plot(png_path)
+    if save_session_plot:
+        logger.save_plot(png_path)
 
     final_pos = robot.get_position()
     err_dist = math.hypot(final_pos[0] - target[0], final_pos[1] - target[1])
@@ -384,11 +389,15 @@ def run_batch_benchmark(
     dist_tol: float = DEFAULT_DIST_TOL,
     angle_tol: float = DEFAULT_ANGLE_TOL,
     dwell_time: float = DEFAULT_DWELL_TIME,
-    max_duration: float = DEFAULT_MAX_DURATION
+    max_duration: float = DEFAULT_MAX_DURATION,
+    repeats: int = 5
 ) -> Dict[str, Any]:
     """
     Executes the comprehensive benchmarking battery and synthesizes ISO 18646-2 metrology.
+    Per ISO 18646-2 Clause 4.2, each nominal starting pose (x0, y0, th0) is repeated
+    `repeats` times to evaluate unidirectional position/orientation accuracy and repeatability.
     """
+    repeats = max(1, int(repeats))
     scenarios = EXTENDED_TEST_SCENARIOS if suite == "extended" else CANONICAL_TEST_SCENARIOS
 
     now = datetime.now()
@@ -413,7 +422,7 @@ def run_batch_benchmark(
     print(f"Kinematic Limits     : V_MAX = {V_MAX:.2f} m/s | W_MAX = {W_MAX:.2f} rad/s")
     print(f"Docking Envelope     : Position <= {dist_tol * 100:.1f} cm | Orientation <= {math.degrees(angle_tol):.1f}°")
     print(f"Stationary Dwell     : {dwell_time:.1f} s continuous immobilization requirement")
-    print(f"Test Suite Selected  : {suite.upper()} ({len(scenarios)} multi-quadrant scenarios)")
+    print(f"Test Suite Selected  : {suite.upper()} ({len(scenarios)} starting poses x {repeats} reps = {len(scenarios) * repeats} trials)")
     print(f"Artifact Destination : {test_dir}")
     print(f"  ├── CSV Data Traces: {data_dir}")
     print(f"  └── Image Dashboard: {images_dir}")
@@ -425,8 +434,9 @@ def run_batch_benchmark(
     model.eval()
 
     results = []
+    results_by_scenario: Dict[int, List[Dict[str, Any]]] = collections.defaultdict(list)
 
-    # 2. Execute Trials
+    # 2. Execute Trials (ISO 18646-2 repeated trials per nominal starting pose)
     if use_gazebo:
         if not ROS2_AVAILABLE:
             print("[Warning] rclpy or ROS 2 not detected in environment. Falling back to Kinematic Simulation.")
@@ -436,21 +446,32 @@ def run_batch_benchmark(
                 rclpy.init()
                 robot = LimoROS2Interface(safety_limits=False)
                 for idx, (name, x0, y0, th0, quad) in enumerate(scenarios, start=1):
-                    res = run_gazebo_benchmark_run(
-                        robot=robot,
-                        model=model,
-                        x0=x0, y0=y0, th0=th0,
-                        run_name=f"Run_{idx}_Q{quad}",
-                        target=[0.0, 0.0, 0.0],
-                        max_duration=max_duration,
-                        dist_tol=dist_tol,
-                        angle_tol=angle_tol,
-                        dwell_time_required=dwell_time,
-                        output_dir=data_dir,
-                        output_images_dir=images_dir
-                    )
-                    results.append(res)
-                    time.sleep(0.5)
+                    for rep in range(1, repeats + 1):
+                        run_label = f"Run_{idx}_Q{quad}" if rep == 1 else f"Rep{rep}_Run_{idx}_Q{quad}"
+                        res = run_gazebo_benchmark_run(
+                            robot=robot,
+                            model=model,
+                            x0=x0, y0=y0, th0=th0,
+                            run_name=run_label,
+                            target=[0.0, 0.0, 0.0],
+                            max_duration=max_duration,
+                            dist_tol=dist_tol,
+                            angle_tol=angle_tol,
+                            dwell_time_required=dwell_time,
+                            output_dir=data_dir,
+                            output_images_dir=images_dir,
+                            save_session_plot=(rep == 1)
+                        )
+                        res["scenario_id"] = idx
+                        res["scenario_name"] = name
+                        res["quadrant"] = quad
+                        res["x0"] = x0
+                        res["y0"] = y0
+                        res["th0"] = th0
+                        res["rep"] = rep
+                        results.append(res)
+                        results_by_scenario[idx].append(res)
+                        time.sleep(0.5)
             except Exception as e:
                 print(f"[Gazebo Warning] Communication failure: {e}. Falling back to simulation.")
                 use_gazebo = False
@@ -463,25 +484,93 @@ def run_batch_benchmark(
 
     if not use_gazebo:
         for idx, (name, x0, y0, th0, quad) in enumerate(scenarios, start=1):
-            res = run_simulated_benchmark_run(
-                model=model,
-                x0=x0, y0=y0, th0=th0,
-                run_name=f"Run_{idx}_Q{quad}",
-                target=[0.0, 0.0, 0.0],
-                max_duration=max_duration,
-                dist_tol=dist_tol,
-                angle_tol=angle_tol,
-                dwell_time_required=dwell_time,
-                output_dir=data_dir,
-                output_images_dir=images_dir
-            )
-            results.append(res)
+            for rep in range(1, repeats + 1):
+                if rep == 1:
+                    rx0, ry0, rth0 = x0, y0, th0
+                else:
+                    # Physical placement tolerance (~1 cm position, ~1 deg orientation)
+                    # per ISO 18646-2 repeated trials around nominal starting mark (x0, y0, th0)
+                    rng = random.Random(42 + idx * 100 + rep)
+                    rx0 = round(x0 + rng.gauss(0.0, 0.010), 4)
+                    ry0 = round(y0 + rng.gauss(0.0, 0.010), 4)
+                    rth0 = recast_angle(th0 + rng.gauss(0.0, 0.017))
+                run_label = f"Run_{idx}_Q{quad}" if rep == 1 else f"Rep{rep}_Run_{idx}_Q{quad}"
+                res = run_simulated_benchmark_run(
+                    model=model,
+                    x0=rx0, y0=ry0, th0=rth0,
+                    run_name=run_label,
+                    target=[0.0, 0.0, 0.0],
+                    max_duration=max_duration,
+                    dist_tol=dist_tol,
+                    angle_tol=angle_tol,
+                    dwell_time_required=dwell_time,
+                    output_dir=data_dir,
+                    output_images_dir=images_dir,
+                    save_session_plot=(rep == 1)
+                )
+                res["scenario_id"] = idx
+                res["scenario_name"] = name
+                res["quadrant"] = quad
+                res["x0"] = x0
+                res["y0"] = y0
+                res["th0"] = th0
+                res["rep"] = rep
+                results.append(res)
+                results_by_scenario[idx].append(res)
 
     if not results:
         print("[Error] No benchmark runs were executed.")
         return {}
 
-    # 3. Calculate ISO 18646-2 Metrological Metrics
+    # 3. Calculate ISO 18646-2 Metrological Metrics (Per Starting Position & Global)
+    scenario_iso_rows = []
+    print("\n" + "=" * 78)
+    print("   ISO 18646-2 UNIDIRECTIONAL METROLOGY PER STARTING POSE (CLAUSE 4.2)")
+    print("=" * 78)
+    for idx, (name, x0, y0, th0, quad) in enumerate(scenarios, start=1):
+        s_runs = results_by_scenario[idx]
+        s_iso = compute_iso_18646_metrics(
+            [{"xf": r["xf"], "yf": r["yf"], "thf": r["thf"]} for r in s_runs],
+            xc=0.0, yc=0.0, oc=0.0
+        )
+        if s_iso:
+            s_succ = sum(1 for r in s_runs if r["success"])
+            s_rate = round(100.0 * s_succ / len(s_runs), 1)
+            mean_el = round(sum(r["elapsed"] for r in s_runs) / len(s_runs), 2)
+            print(
+                f"  • Pose {idx:02d} ({name:<20s} | n={len(s_runs)}) : "
+                f"Ap={s_iso['Ap']*100:.2f}cm | Rp={s_iso['Rp']*100:.2f}cm | "
+                f"Ao={s_iso['Ao_abs_deg']:.2f}° | Ro={s_iso['Ro_deg']:.2f}°"
+            )
+            scenario_iso_rows.append({
+                "scenario_id": idx,
+                "scenario_name": name,
+                "quadrant": quad,
+                "x0": x0,
+                "y0": y0,
+                "th0_deg": round(math.degrees(th0), 1),
+                "reps": len(s_runs),
+                "successes": s_succ,
+                "success_rate_pct": s_rate,
+                "Ap_m": round(s_iso["Ap"], 4),
+                "Rp_m": round(s_iso["Rp"], 4),
+                "Ao_deg": round(s_iso["Ao_abs_deg"], 2),
+                "Ro_deg": round(s_iso["Ro_deg"], 2),
+                "Sl_m": round(s_iso["Sl"], 4),
+                "So_deg": round(s_iso["So_deg"], 2),
+                "mean_dist_err_m": round(s_iso["mean_err_pos"], 4),
+                "mean_elapsed_s": mean_el
+            })
+
+    if scenario_iso_rows:
+        scen_csv_path = os.path.join(data_dir, "iso_metrics_by_scenario.csv")
+        with open(scen_csv_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=list(scenario_iso_rows[0].keys()))
+            writer.writeheader()
+            writer.writerows(scenario_iso_rows)
+        os.makedirs("calculus", exist_ok=True)
+        shutil.copy2(scen_csv_path, os.path.join("calculus", "iso_metrics_by_scenario.csv"))
+
     trials_for_iso = [{"xf": r["xf"], "yf": r["yf"], "thf": r["thf"]} for r in results]
     iso_metrics = compute_iso_18646_metrics(trials_for_iso, xc=0.0, yc=0.0, oc=0.0)
 
@@ -602,6 +691,7 @@ if __name__ == "__main__":
     parser.add_argument("--angle-tol", type=float, default=DEFAULT_ANGLE_TOL, help=f"Docking orientation tolerance (default: {DEFAULT_ANGLE_TOL}rad)")
     parser.add_argument("--dwell-time", type=float, default=DEFAULT_DWELL_TIME, help=f"Required stationary dwell time at dock (default: {DEFAULT_DWELL_TIME}s)")
     parser.add_argument("--max-time", type=float, default=DEFAULT_MAX_DURATION, help=f"Maximum duration ceiling (default: {DEFAULT_MAX_DURATION}s)")
+    parser.add_argument("--repeats", type=int, default=5, help="Number of exhaustive repetitions per starting pose per ISO 18646-2 (default: 5)")
     args = parser.parse_args()
 
     use_gazebo = args.gazebo and not args.sim
@@ -613,5 +703,6 @@ if __name__ == "__main__":
         dist_tol=args.dist_tol,
         angle_tol=args.angle_tol,
         dwell_time=args.dwell_time,
-        max_duration=args.max_time
+        max_duration=args.max_time,
+        repeats=args.repeats
     )

@@ -18,6 +18,7 @@ Standards: ROS REP-103 & ISO 18646-2
 from __future__ import annotations
 
 import os
+import re
 import glob
 import csv
 import math
@@ -240,6 +241,7 @@ def evaluate_directory(input_dir: str = "data/evaluation", output_dir: str = "ca
 
     trials = []
     trials_by_quad = defaultdict(list)
+    trials_by_scenario = defaultdict(list)
 
     for path in sorted(csv_files):
         parsed = parse_final_pose(path)
@@ -248,6 +250,13 @@ def evaluate_directory(input_dir: str = "data/evaluation", output_dir: str = "ca
             parsed.update(integ)
             trials.append(parsed)
             trials_by_quad[parsed["quadrant"]].append(parsed)
+            fname = parsed["file"].lower()
+            m = re.search(r"run_(\d+)_q(\d+)", fname)
+            if m:
+                scen_id = int(m.group(1))
+            else:
+                scen_id = len(trials_by_scenario) + 1
+            trials_by_scenario[scen_id].append(parsed)
 
     if not trials:
         print("[calculate_iso_metrics] No valid trials extracted.")
@@ -262,7 +271,60 @@ def evaluate_directory(input_dir: str = "data/evaluation", output_dir: str = "ca
         writer.writeheader()
         writer.writerows(trials)
 
-    # 2. Compute global and per-quadrant ISO 18646-2 metrics
+    # 2. Compute per-starting-pose (scenario) ISO 18646-2 metrics (Clause 4.2 Unidirectional)
+    scenario_summary = []
+    print("\n" + "=" * 78)
+    print("--- ISO 18646-2 UNIDIRECTIONAL METROLOGY BY STARTING POSITION ---")
+    print("=" * 78)
+    for scen_id in sorted(trials_by_scenario.keys()):
+        s_group = trials_by_scenario[scen_id]
+        s_metrics = compute_iso_18646_metrics(
+            s_group,
+            xc=s_group[0].get("tx", 0.0),
+            yc=s_group[0].get("ty", 0.0),
+            oc=s_group[0].get("tth", 0.0)
+        )
+        if s_metrics:
+            nominal_trials = [t for t in s_group if not t["file"].lower().startswith("rep")]
+            ref = nominal_trials[0] if nominal_trials else s_group[0]
+            succ_count = sum(
+                1 for t in s_group
+                if math.hypot(t["xf"] - t["tx"], t["yf"] - t["ty"]) <= 0.08
+                and abs(recast_angle(t["thf"] - t["tth"])) <= 0.26
+            )
+            row = {
+                "scenario_id": scen_id,
+                "scenario_name": f"Pose {scen_id} - Q{ref['quadrant']}",
+                "quadrant": ref["quadrant"],
+                "x0": round(ref["x0"], 2),
+                "y0": round(ref["y0"], 2),
+                "th0_deg": round(math.degrees(ref["th0"]), 1),
+                "reps": s_metrics["n"],
+                "successes": succ_count,
+                "success_rate_pct": round(100.0 * succ_count / s_metrics["n"], 1),
+                "Ap_m": round(s_metrics["Ap"], 4),
+                "Rp_m": round(s_metrics["Rp"], 4),
+                "Ao_deg": round(s_metrics["Ao_abs_deg"], 2),
+                "Ro_deg": round(s_metrics["Ro_deg"], 2),
+                "Sl_m": round(s_metrics["Sl"], 4),
+                "So_deg": round(s_metrics["So_deg"], 2),
+                "mean_dist_err_m": round(s_metrics["mean_err_pos"], 4),
+            }
+            scenario_summary.append(row)
+            print(
+                f"Pose {scen_id:02d} (Q{ref['quadrant']}, n={row['reps']}) | "
+                f"Ap: {row['Ap_m']*100:.2f} cm | Rp: {row['Rp_m']*100:.2f} cm | "
+                f"Ao: {row['Ao_deg']:.2f}° | Ro: {row['Ro_deg']:.2f}°"
+            )
+
+    if scenario_summary:
+        scen_csv = os.path.join(output_dir, "iso_metrics_by_scenario.csv")
+        with open(scen_csv, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=list(scenario_summary[0].keys()))
+            writer.writeheader()
+            writer.writerows(scenario_summary)
+
+    # 3. Compute global and per-quadrant ISO 18646-2 metrics
     quad_summary = []
     print("\n" + "=" * 70)
     print("--- ISO 18646-2 METROLOGICAL EVALUATION RESULTS ---")
